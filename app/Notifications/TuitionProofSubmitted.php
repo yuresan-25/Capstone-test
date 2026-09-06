@@ -72,4 +72,4 @@ class TuitionProofSubmitted extends Notification
                 : null,
         ];
     }
-}
+}   

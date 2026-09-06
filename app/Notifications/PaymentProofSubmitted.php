@@ -24,7 +24,7 @@ class PaymentProofSubmitted extends Notification
         return ['database'];
     }
 
-    public function toArray(object $notifiable): array
+    public function toArray(object $notifiable): arrayf
     {
         $enrollment = $this->payment->plan->enrollment;
         $studentName = trim($enrollment->first_name . ' ' . $enrollment->last_name);
