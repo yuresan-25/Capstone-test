@@ -45,20 +45,19 @@
               <i class="bi bi-people-fill me-1"></i>Viewing tuition for — tap to switch child
             </div>
             <div class="d-flex flex-wrap gap-2" id="tuitionChildSwitcher">
-    @forelse($approvedChildren as $i => $child)
-        @php $initials = strtoupper(substr($child->first_name, 0, 1) . substr($child->last_name, 0, 1)); @endphp
-        <button type="button" class="child-switch-btn {{ $i === 0 ? 'active' : '' }}" data-index="{{ $i }}" onclick="selectTuitionChild(this, {{ $i }})">
-            <span class="child-switch-avatar">{{ $initials }}</span>
-            <span class="child-switch-text">
-                <span class="child-switch-name">{{ $child->first_name }} {{ $child->last_name }}</span>
-                <span class="child-switch-grade">{{ $child->grade_level }}</span>
-            </span>
-            <i class="bi bi-check-circle-fill child-switch-check"></i>
-        </button>
-    @empty
-        <p>No approved children found in the database.</p>
-    @endforelse
-</div>
+              @foreach($approvedChildren as $i => $child)
+              @php $initials = strtoupper(substr($child->first_name, 0, 1) . substr($child->last_name, 0, 1)); @endphp
+              <button type="button" class="child-switch-btn {{ $i === 0 ? 'active' : '' }}" data-index="{{ $i }}" onclick="selectTuitionChild(this, {{ $i }})">
+                <span class="child-switch-avatar">{{ $initials }}</span>
+                <span class="child-switch-text">
+                  <span class="child-switch-name">{{ $child->first_name }} {{ $child->last_name }}</span>
+                  <span class="child-switch-grade">{{ $child->grade_level }}</span>
+                </span>
+                <i class="bi bi-check-circle-fill child-switch-check"></i>
+              </button>
+              @endforeach
+            </div>
+          </div>
           <script>
             // Keeps the existing switchTuitionChild(index) contract (it still
             // loads/shows the right pane) — this just swaps which button in
