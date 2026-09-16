@@ -391,10 +391,18 @@ class EnrollmentController extends Controller
      */
     public function export(Request $request)
     {
+        $request->validate([
+            'format' => 'nullable|in:csv,pdf',
+        ]);
+
         $query = StudentEnrollment::with('section')
             ->whereIn('status', ['approved', 'enrolled'])
             ->when($request->filled('grade_level'), fn ($q) => $q->where('grade_level', $request->input('grade_level')))
             ->orderBy('last_name');
+
+        if ($request->input('format') === 'pdf') {
+            return $this->exportPdf($request, $query);
+        }
 
         $filename = 'students_' . now()->format('Y-m-d_His') . '.csv';
 
@@ -420,6 +428,43 @@ class EnrollmentController extends Controller
 
             fclose($out);
         }, $filename, ['Content-Type' => 'text/csv']);
+    }
+
+    /**
+     * PDF branch of export(). Renders admin/exports/students-pdf.blade.php
+     * through dompdf so the output is a consistent, paginated document with
+     * the school header — unlike a browser print, which varies per machine.
+     *
+     * Not chunked like the CSV path: dompdf builds the whole document in
+     * memory anyway, so the collection has to be fully loaded regardless.
+     */
+    private function exportPdf(Request $request, $query)
+    {
+        $students = $query->get();
+
+        $gradeLevel = $request->input('grade_level');
+
+        // The logo is embedded as a data URI — dompdf resolves relative
+        // asset() URLs inconsistently depending on how the app is served,
+        // and a missing image would silently render as a broken box.
+        $logoPath = public_path('photo/logo.png');
+        $logoData = null;
+        if (is_file($logoPath)) {
+            $logoData = 'data:image/png;base64,' . base64_encode(file_get_contents($logoPath));
+        }
+
+        $pdf = \Barryvdh\DomPDF\Facade\Pdf::loadView('admin.exports.students-pdf', [
+            'students'    => $students,
+            'title'       => $gradeLevel ? $gradeLevel . ' — Student List' : 'Master Student List',
+            'gradeFilter' => $gradeLevel ?: 'All Grade Levels',
+            'generatedAt' => now()->format('M d, Y g:i A'),
+            'generatedBy' => trim(($request->user()->first_name ?? '') . ' ' . ($request->user()->last_name ?? '')) ?: 'Administrator',
+            'logoData'    => $logoData,
+        ])->setPaper('a4', 'landscape');
+
+        $filename = 'students_' . now()->format('Y-m-d_His') . '.pdf';
+
+        return $pdf->download($filename);
     }
 
     /**
