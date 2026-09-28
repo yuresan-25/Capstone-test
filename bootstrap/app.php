@@ -20,6 +20,9 @@ return Application::configure(basePath: dirname(__DIR__))
         // breaks secure cookies and generates http:// URLs behind an https:// site.
         $middleware->trustProxies(at: '*');
 
+        // PayMongo can't send a CSRF token; the webhook verifies its signature instead.
+        $middleware->validateCsrfTokens(except: ['webhooks/paymongo']);
+
         $middleware->append(\App\Http\Middleware\SecurityHeaders::class);
         $middleware->append(\App\Http\Middleware\TrackLastSeen::class);
 

@@ -40,4 +40,19 @@ return [
         'secret_key' => env('RECAPTCHA_SECRET_KEY'),
     ],
 
+    // Online tuition payments. Use test keys (pk_test_/sk_test_) until the
+    // school's PayMongo account is activated for live payments.
+    'paymongo' => [
+        'public_key'     => env('PAYMONGO_PUBLIC_KEY'),
+        'secret_key'     => env('PAYMONGO_SECRET_KEY'),
+        // From `php artisan paymongo:webhook <url>` (whsk_... / hook_...).
+        'webhook_secret' => env('PAYMONGO_WEBHOOK_SECRET'),
+        'webhook_id'     => env('PAYMONGO_WEBHOOK_ID'),
+        // gcash, paymaya, card, dob (online banking) — see PayMongo's
+        // payment_method_types for the full list.
+        'methods'        => array_filter(array_map('trim', explode(',', env('PAYMONGO_METHODS', 'gcash,paymaya,card,dob')))),
+        // Smallest amount (₱) a parent may pay online in one checkout.
+        'min_amount'     => (float) env('PAYMONGO_MIN_AMOUNT', 20),
+    ],
+
 ];

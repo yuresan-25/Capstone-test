@@ -206,24 +206,9 @@
     @endif
   </main>
 
-  {{-- Dompdf page numbering: rendered via inline PHP into the footer's
-       .pagenum span on every page. --}}
-  <script type="text/php">
-    if (isset($pdf)) {
-      $font = $fontMetrics->getFont("DejaVu Sans", "normal");
-      $size = 8.5;
-      $pageText = $PAGE_NUM . " of " . $PAGE_COUNT;
-      $width = $fontMetrics->getTextWidth($pageText, $font, $size);
-      $pdf->page_text(
-        $pdf->get_width() - $width - 40,
-        $pdf->get_height() - 38,
-        $pageText,
-        $font,
-        $size,
-        array(0.58, 0.64, 0.72)
-      );
-    }
-  </script>
+  {{-- Page numbers ("1 of 3") are stamped onto every page by
+       EnrollmentController::exportPdf() via the dompdf canvas — dompdf's
+       inline <script type="text/php"> is disabled by default. --}}
 
 </body>
 </html>

@@ -462,6 +462,20 @@ class EnrollmentController extends Controller
             'logoData'    => $logoData,
         ])->setPaper('a4', 'landscape');
 
+        // Page numbers go on after layout, once the total page count is
+        // known; download() below reuses this render instead of redoing it.
+        $pdf->render();
+        $dompdf = $pdf->getDomPDF();
+        $canvas = $dompdf->getCanvas();
+        $canvas->page_text(
+            $canvas->get_width() - 80,
+            $canvas->get_height() - 38,
+            '{PAGE_NUM} of {PAGE_COUNT}',
+            $dompdf->getFontMetrics()->getFont('DejaVu Sans'),
+            8.5,
+            [0.58, 0.64, 0.72]
+        );
+
         $filename = 'students_' . now()->format('Y-m-d_His') . '.pdf';
 
         return $pdf->download($filename);
@@ -554,18 +568,7 @@ class EnrollmentController extends Controller
         }
 
         $enrollment->update(['status' => 'approved']);
-        $downPayment = $enrollment->tuitionPlan?->payments()
-                ->where('installment_number', 0)
-                ->where('status', 'pending')
-                ->first();
-
-            if ($downPayment) {
-                $downPayment->update([
-                    'status'      => 'paid',
-                    'paid_at'     => now(),
-                    'verified_by' => $request->user()->id,
-                ]);
-            }
+        $this->settleDownPayment($enrollment, $request->user());
 
         // Approving the application implies the submitted documents were
         // reviewed too — otherwise every requirement stays stuck on
@@ -589,6 +592,30 @@ class EnrollmentController extends Controller
             'success' => true,
             'message' => trim($enrollment->first_name . ' ' . $enrollment->last_name) . ' has been approved.',
         ]);
+    }
+
+    /**
+     * Approving an application implies its Step 1 enrollment-fee receipt
+     * was accepted too, so any still-pending down payment proof is verified
+     * and the installment's status recomputed from its proofs. A proof the
+     * admin already sent back for resubmission is left rejected — that
+     * money is still owed.
+     */
+    private function settleDownPayment(StudentEnrollment $enrollment, $admin): void
+    {
+        $downPayment = $enrollment->tuitionPlan?->payments()->where('installment_number', 0)->first();
+
+        if (! $downPayment || ! $downPayment->proofs()->exists()) {
+            return;
+        }
+
+        $downPayment->proofs()->where('status', 'pending')->update([
+            'status'      => 'verified',
+            'verified_at' => now(),
+            'verified_by' => $admin->id,
+        ]);
+
+        $downPayment->refreshStatus();
     }
 
     /**
@@ -627,18 +654,7 @@ class EnrollmentController extends Controller
                 }
 
                 $enrollment->update(['status' => 'approved']);
-                $downPayment = $enrollment->tuitionPlan?->payments()
-                    ->where('installment_number', 0)
-                    ->where('status', 'pending')
-                    ->first();
-
-                if ($downPayment) {
-                    $downPayment->update([
-                        'status'      => 'paid',
-                        'paid_at'     => now(),
-                        'verified_by' => $request->user()->id,
-                    ]);
-                }
+                $this->settleDownPayment($enrollment, $request->user());
 
                 // Same auto-approval as the single approve() path — a
                 // bulk-approved batch shouldn't leave its documents stuck

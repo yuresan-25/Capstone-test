@@ -18,11 +18,16 @@ class TuitionPaymentProof extends Model
         'verified_at',
         'verified_by',
         'feedback',
+        'source',
+        'paymongo_payment_id',
+        'paymongo_checkout_id',
+        'gateway_fee',
     ];
 
     protected $casts = [
         'amount'          => 'decimal:2',
         'verified_amount' => 'decimal:2',
+        'gateway_fee'     => 'decimal:2',
         'submitted_at'    => 'datetime',
         'verified_at'     => 'datetime',
     ];
@@ -46,5 +51,16 @@ class TuitionPaymentProof extends Model
     public function creditedAmount(): float
     {
         return (float) ($this->verified_amount ?? $this->amount);
+    }
+
+    public function isOnline(): bool
+    {
+        return $this->source === 'paymongo';
+    }
+
+    /** Acknowledgment receipt number shown on the PDF, e.g. AR-000042. */
+    public function receiptNumber(): string
+    {
+        return 'AR-' . str_pad((string) $this->id, 6, '0', STR_PAD_LEFT);
     }
 }

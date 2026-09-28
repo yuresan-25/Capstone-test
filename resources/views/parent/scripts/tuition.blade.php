@@ -8,23 +8,95 @@ var tuitionPaymentBeingSubmitted = null; // payment id currently open in the mod
 var tuitionPaneIndexBeingSubmitted = null; // which child pane to refresh after submit
 var tuitionRemainingBeingSubmitted = 0; // remaining balance on that installment, caps the amount input
 
-// Overall installment status — now unpaid / partial / paid, since one
-// installment can hold several proofs and isn't "pending" as a whole.
-var TUITION_STATUS_BADGE = {
-  paid:    '<span class="badge bg-success-subtle text-success px-3 py-1 rounded-pill">Paid</span>',
-  partial: '<span class="badge bg-info-subtle text-info px-3 py-1 rounded-pill">Partially Paid</span>',
-  unpaid:  '<span class="badge bg-secondary-subtle text-secondary px-3 py-1 rounded-pill">Unpaid</span>',
-};
+// Online payments through PayMongo — off (upload-only) until the secret key is set.
+var PAYMONGO_ENABLED = @json(\App\Support\PayMongo::enabled());
+var PAYMONGO_MIN_AMOUNT = @json((float) config('services.paymongo.min_amount'));
+var submitPaymentMode = PAYMONGO_ENABLED ? 'online' : 'manual';
+
+function setSubmitPaymentMode(mode) {
+  submitPaymentMode = mode;
+  document.querySelectorAll('#submitPaymentModeTabs .tp-tab').forEach(function (tab) {
+    var active = tab.dataset.mode === mode;
+    tab.classList.toggle('active', active);
+    tab.setAttribute('aria-selected', active);
+  });
+  document.getElementById('submitPaymentOnlineFields').classList.toggle('d-none', mode !== 'online');
+  document.getElementById('submitPaymentManualFields').classList.toggle('d-none', mode !== 'manual');
+  document.getElementById('submitPaymentBtn').innerHTML = mode === 'online'
+    ? '<i class="bi bi-lock-fill me-1"></i>Continue to Payment'
+    : '<i class="bi bi-send me-1"></i>Submit';
+  document.getElementById('submitPaymentError').classList.add('d-none');
+}
 
 // Status of one individual proof submission.
 var PROOF_STATUS_BADGE = {
-  pending:  '<span class="badge bg-warning-subtle text-warning px-2 py-1 rounded-pill">Pending Verification</span>',
-  verified: '<span class="badge bg-success-subtle text-success px-2 py-1 rounded-pill">Verified</span>',
-  rejected: '<span class="badge bg-danger-subtle text-danger px-2 py-1 rounded-pill">Rejected</span>',
+  pending:  '<span class="tp-pill tp-pill-pending">Pending Verification</span>',
+  verified: '<span class="tp-pill tp-pill-paid">Verified</span>',
+  rejected: '<span class="tp-pill tp-pill-rejected">Needs Resubmit</span>',
 };
 
 function installmentLabel(p) {
   return p.installment_number === 0 ? 'Upon Enrollment (Down Payment)' : 'Installment ' + p.installment_number;
+}
+
+function peso(n) {
+  return '₱' + Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+// Admin feedback, names, etc. go into innerHTML below — escape them.
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+}
+
+// For values placed inside a single-quoted JS string in an onclick="" attribute.
+function jsArg(s) {
+  return esc(String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'"));
+}
+
+function methodTag(label) {
+  if (!label) return '';
+  var key = /gcash/i.test(label) ? 'gcash' : /maya/i.test(label) ? 'maya' : /bank/i.test(label) ? 'bank' : /card/i.test(label) ? 'card' : 'cash';
+  return '<span class="tp-method tp-method-' + key + '">' + esc(label) + '</span>';
+}
+
+// The installment's headline status. A submitted-but-unreviewed proof
+// outranks unpaid/partial, so the parent sees their payment is in review.
+function installmentPill(p) {
+  if (p.status === 'paid') return '<span class="tp-pill tp-pill-paid">Paid</span>';
+  if (p.pending_amount > 0) return '<span class="tp-pill tp-pill-pending">Pending Verification</span>';
+  if (p.status === 'partial') return '<span class="tp-pill tp-pill-partial">Partially Paid</span>';
+  if (p.is_overdue) return '<span class="tp-pill tp-pill-overdue">Overdue</span>';
+  return '<span class="tp-pill tp-pill-unpaid">Unpaid</span>';
+}
+
+// What's still payable once pending submissions are accounted for.
+function openBalance(p) {
+  return Math.max(0, Math.round((p.remaining_balance - (p.pending_amount || 0)) * 100) / 100);
+}
+
+function payButton(p, index, cls, text) {
+  return '<button type="button" class="' + cls + '" onclick="openSubmitPaymentModal(' + p.id + ', \'' + jsArg(installmentLabel(p)) + '\', ' + index + ', ' + openBalance(p) + ')">' + text + '</button>';
+}
+
+function viewButton(url, title) {
+  return '<button type="button" class="btn btn-outline-secondary btn-sm" style="font-size:12px" onclick="viewDocument(\'' + jsArg(url) + '\', \'' + jsArg(title) + '\')"><i class="bi bi-eye me-1"></i>View</button>';
+}
+
+function receiptButton(url) {
+  return '<a class="btn btn-outline-secondary btn-sm" style="font-size:12px" href="' + esc(url) + '" target="_blank" rel="noopener"><i class="bi bi-receipt me-1"></i>Receipt</a>';
+}
+
+// View (uploaded image, if any) + Receipt (once verified). Online payments
+// have no image — PayMongo's confirmation is the proof.
+function proofActions(url, receiptUrl, title) {
+  return (url ? viewButton(url, title) : '') + (receiptUrl ? receiptButton(receiptUrl) : '');
+}
+
+function monthYear(dateStr) {
+  var d = new Date(dateStr);
+  return isNaN(d) ? '' : d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
 }
 
 function loadTuitionPane(index, enrollmentId) {
@@ -57,74 +129,152 @@ function renderTuitionPane(data, index) {
   }
 
   var plan = data.plan;
-  var planLabel = plan.plan_type === 'quarterly' ? 'Quarterly Plan' : 'Monthly Plan (10 months)';
+  var payments = data.payments || [];
+  var installments = payments.filter(function (p) { return p.installment_number > 0; });
+  var downPayment = payments.find(function (p) { return p.installment_number === 0; });
+  var isQuarterly = plan.plan_type === 'quarterly';
+  var cycle = isQuarterly ? 'quarter' : 'month';
+
+  var planTitle = (isQuarterly ? 'Quarterly' : 'Monthly') + ' Installment Plan (' + installments.length + ' ' + cycle + (installments.length === 1 ? '' : 's') + ')';
+  var planSub = 'Tuition balance split into ' + installments.length + ' ' + cycle + 'ly payments';
+  if (installments.length) {
+    planSub += ', from ' + monthYear(installments[0].due_date) + ' to ' + monthYear(installments[installments.length - 1].due_date);
+  }
+
+  var percent = plan.total_amount > 0 ? Math.min(100, Math.round(plan.total_paid / plan.total_amount * 100)) : 0;
+  // "Pay Next Due" = the earliest installment that still has an open balance.
+  var nextDue = payments.find(function (p) { return openBalance(p) > 0; });
 
   var html = '';
 
-  // Summary card
-  html += '<div class="card border rounded-3 p-4 mb-3">';
-  html += '  <div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mb-3">';
-  html += '    <div><div class="text-muted" style="font-size:12px">Payment Plan</div><div class="fw-bold" style="font-size:15px;color:#1e293b">' + planLabel + '</div></div>';
-  html += '    <div class="text-end"><div class="text-muted" style="font-size:12px">Remaining Balance</div><div class="fw-bold" style="font-size:18px;color:#1a2a5e">₱' + Number(plan.remaining_balance).toLocaleString(undefined, {minimumFractionDigits:2}) + '</div></div>';
+  // ── Summary ──
+  html += '<div class="tp-card tp-summary mb-4">';
+  html += '  <div class="d-flex justify-content-between align-items-start flex-wrap gap-3">';
+  html += '    <div style="min-width:0;flex:1 1 280px">';
+  html += '      <div class="d-flex align-items-center gap-2 flex-wrap"><span class="tp-pill tp-pill-plan">Enrolled Plan</span>' + (plan.school_year ? '<span style="font-size:12px;color:#94a3b8">SY ' + esc(plan.school_year) + '</span>' : '') + '</div>';
+  html += '      <div class="tp-plan-title">' + planTitle + '</div>';
+  html += '      <div class="tp-plan-sub">' + planSub + '</div>';
+  html += '    </div>';
+  html += '    <div class="tp-balance">';
+  html += '      <div><div class="tp-balance-label">Remaining Balance</div><div class="tp-balance-amount">' + peso(plan.remaining_balance) + '</div></div>';
+  if (nextDue) {
+    html +=      payButton(nextDue, index, 'tp-btn-gold', 'Pay Next Due <i class="bi bi-chevron-right ms-1"></i>');
+  } else if (plan.remaining_balance <= 0) {
+    html += '      <span class="tp-pill tp-pill-paid"><i class="bi bi-check-circle-fill"></i>Fully Paid</span>';
+  }
+  html += '    </div>';
   html += '  </div>';
-  html += '  <div class="row g-2 text-center">';
-  html += '    <div class="col-4"><div class="text-muted" style="font-size:11px">Total Tuition</div><div class="fw-semibold" style="font-size:13px">₱' + Number(plan.total_amount).toLocaleString(undefined, {minimumFractionDigits:2}) + '</div></div>';
-  html += '    <div class="col-4"><div class="text-muted" style="font-size:11px">Down Payment</div><div class="fw-semibold" style="font-size:13px">₱' + Number(plan.down_payment).toLocaleString(undefined, {minimumFractionDigits:2}) + '</div></div>';
-  html += '    <div class="col-4"><div class="text-muted" style="font-size:11px">Paid So Far</div><div class="fw-semibold text-success" style="font-size:13px">₱' + Number(plan.total_paid).toLocaleString(undefined, {minimumFractionDigits:2}) + '</div></div>';
+
+  html += '  <div class="tp-stats">';
+  html += '    <div class="tp-stat"><div class="tp-stat-label">Total Tuition</div><div class="tp-stat-value">' + peso(plan.total_amount) + '</div><div class="tp-stat-note">Full school-year fee</div></div>';
+
+  var dpVerified = downPayment && downPayment.status === 'paid';
+  var dpVerifiedProof = downPayment && (downPayment.proofs || []).find(function (pr) { return pr.status === 'verified'; });
+  html += '    <div class="tp-stat"><div class="tp-stat-label">Down Payment' + (downPayment ? ' ' + (dpVerified ? '<span class="tp-pill tp-pill-paid"><i class="bi bi-check-lg"></i>Verified</span>' : installmentPill(downPayment)) : '') + '</div>';
+  html += '      <div class="tp-stat-value">' + peso(plan.down_payment) + '</div>';
+  html += '      <div class="tp-stat-note">' + (dpVerifiedProof && dpVerifiedProof.verified_at ? 'Cleared ' + esc(dpVerifiedProof.verified_at.replace(/\s+\d{1,2}:\d{2}\s*[AP]M$/, '')) : 'Paid upon enrollment') + '</div></div>';
+
+  html += '    <div class="tp-stat"><div class="tp-stat-label">Paid to Date (Verified) <span class="tp-pill tp-pill-paid">' + percent + '% Completed</span></div>';
+  html += '      <div class="tp-stat-value" style="color:#16a34a">' + peso(plan.total_paid) + '</div>';
+  html += '      <div class="tp-progress" role="progressbar" aria-valuenow="' + percent + '" aria-valuemin="0" aria-valuemax="100"><span style="width:' + percent + '%"></span></div></div>';
   html += '  </div>';
   html += '</div>';
 
-  // Installment schedule
-  html += '<div class="card border rounded-3 overflow-hidden mb-3">';
-  html += '  <div class="p-3 border-bottom bg-light fw-bold" style="font-size:14px;color:#1e293b">Installment Schedule</div>';
-  html += '  <div class="d-flex flex-column">';
+  // ── Installment breakdown ──
+  html += '<div class="tp-card">';
+  html += '  <div class="tp-card-head">';
+  html += '    <div><div class="tp-card-title">Installment Breakdown &amp; Dues</div><div class="tp-card-sub">Track verified payments, partial credits, and upcoming due dates</div></div>';
+  if (installments.length) {
+    html += '  <span class="tp-pill tp-pill-soft">Standard Installment: <strong class="ms-1" style="color:var(--text-dark)">' + peso(installments[0].amount_due) + '</strong>&nbsp;/ ' + cycle + '</span>';
+  }
+  html += '  </div>';
 
-  data.payments.forEach(function (p) {
-    html += '<div class="p-3 border-bottom">';
-    html += '  <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">';
-    html += '    <div>';
-    html += '      <div class="fw-medium" style="font-size:13.5px;color:#1e293b">' + installmentLabel(p) + '</div>';
-    html += '      <div class="text-muted" style="font-size:11.5px">Due ' + p.due_date + ' · ₱' + Number(p.amount_due).toLocaleString(undefined, {minimumFractionDigits:2}) + '</div>';
-    if (p.verified_amount > 0) {
-      html += '      <div class="text-muted mt-1" style="font-size:11px">₱' + Number(p.verified_amount).toLocaleString(undefined, {minimumFractionDigits:2}) + ' verified &bull; ₱' + Number(p.remaining_balance).toLocaleString(undefined, {minimumFractionDigits:2}) + ' remaining</div>';
-    }
-    html += '    </div>';
-    html += '    <div class="d-flex align-items-center gap-2">';
-    html += TUITION_STATUS_BADGE[p.status] || '';
-    if (p.can_submit_proof) {
-      html += '<button type="button" class="btn btn-sm btn-navy fw-semibold" style="font-size:12px" onclick="openSubmitPaymentModal(' + p.id + ', \'' + installmentLabel(p).replace(/'/g, "\\'") + '\', ' + index + ', ' + p.remaining_balance + ')"><i class="bi bi-upload me-1"></i>Pay Now</button>';
-    }
-    html += '    </div>';
+  payments.forEach(function (p) {
+    html += (p.proofs && p.proofs.length) ? renderInstallmentDetail(p, index) : renderInstallmentRow(p, index);
+  });
+
+  html += '</div>';
+
+  html += '<div class="d-flex align-items-start gap-2 mt-3 p-3 rounded-3" style="background:#eff6ff;border:1px solid #bfdbfe;font-size:12.5px;color:#1e40af">' +
+    '<i class="bi bi-info-circle-fill flex-shrink-0 mt-1"></i>' +
+    '<span>Every proof of payment you upload is checked by the school before it counts toward your balance.</span></div>';
+
+  return html;
+}
+
+// An installment the parent has already submitted something for — shown
+// expanded, with each submitted proof listed underneath.
+function renderInstallmentDetail(p, index) {
+  var open = openBalance(p);
+  var isPartial = p.status === 'partial' && !(p.pending_amount > 0);
+
+  var meta = 'Due ' + esc(p.due_date) + ' &bull; Amount due: ' + peso(p.amount_due);
+  if (p.status !== 'paid' && p.verified_amount > 0) {
+    meta += ' &bull; <span class="warn">' + peso(p.remaining_balance) + ' remaining</span>';
+  } else if (p.status !== 'paid' && p.pending_amount > 0) {
+    meta += ' &bull; ' + peso(p.pending_amount) + ' submitted for review';
+  }
+  if (p.verified_amount > p.amount_due) {
+    meta += ' &bull; includes ' + peso(p.verified_amount - p.amount_due) + ' advance credit';
+  }
+
+  var html = '<div class="tp-inst' + (isPartial ? ' is-partial' : '') + '">';
+  html += '<div class="d-flex justify-content-between align-items-start flex-wrap gap-2">';
+  html += '  <div style="min-width:0">';
+  html += '    <div class="d-flex align-items-center gap-2 flex-wrap"><span class="tp-inst-title">' + installmentLabel(p) + '</span>' + installmentPill(p) + '</div>';
+  html += '    <div class="tp-inst-meta">' + meta + '</div>';
+  html += '  </div>';
+  html += '  <div class="d-flex align-items-center gap-3">';
+  if (p.verified_amount > 0) {
+    html += '  <div><div class="tp-inst-total-label">Total Verified</div><div class="tp-inst-total">' + peso(p.verified_amount) + '</div></div>';
+  }
+  if (open > 0) {
+    html += p.verified_amount > 0 || p.pending_amount > 0
+      ? payButton(p, index, isPartial ? 'tp-btn-dark' : 'tp-btn-outline', (isPartial ? '<i class="bi bi-wallet2 me-1"></i>Pay Balance (' : '<i class="bi bi-plus-lg me-1"></i>Pay Remaining (') + peso(open) + ')')
+      : payButton(p, index, 'tp-btn-dark', 'Pay Now');
+  }
+  html += '  </div>';
+  html += '</div>';
+
+  p.proofs.forEach(function (proof) {
+    var state = proof.status === 'verified'
+      ? '<span class="tp-proof-state" style="color:#16a34a"><i class="bi bi-check-lg me-1"></i>Verified</span>'
+      : proof.status === 'pending'
+        ? '<span class="tp-proof-state" style="color:#b45309"><i class="bi bi-circle-fill me-1" style="font-size:7px;vertical-align:middle"></i>Under Review</span>'
+        : '<span class="tp-proof-state" style="color:#b91c1c"><i class="bi bi-arrow-repeat me-1"></i>Needs Resubmit</span>';
+
+    html += '<div class="tp-proof' + (proof.status === 'pending' ? ' is-pending' : proof.status === 'rejected' ? ' is-rejected' : '') + '">';
+    html += '  <div class="d-flex align-items-center gap-2 flex-wrap" style="min-width:0">';
+    html +=      methodTag(proof.payment_method);
+    html += '    <span class="tp-proof-amount">' + peso(proof.amount) + '</span>';
+    html += proof.source === 'paymongo'
+      ? '    <span class="tp-proof-meta">&bull; Paid online ' + esc(proof.submitted_at) + ' &bull; PayMongo ref ' + esc(proof.reference) + '</span>'
+      : '    <span class="tp-proof-meta">&bull; Submitted ' + esc(proof.submitted_at) + (proof.verified_at ? ' &bull; Verified ' + esc(proof.verified_at) : '') + '</span>';
     html += '  </div>';
-
-    // Every proof submitted for this installment so far — a parent may
-    // have sent several partial payments against the same due amount.
-    if (p.proofs && p.proofs.length) {
-      html += '  <div class="d-flex flex-column gap-2 mt-2">';
-      p.proofs.forEach(function (proof) {
-        html += '<div class="d-flex align-items-center justify-content-between flex-wrap gap-2 p-2 rounded-3" style="background:#f8fafc;border:1px solid #e2e8f0">';
-        html += '  <div>';
-        html += '    <div class="fw-medium" style="font-size:12.5px;color:#1e293b">₱' + Number(proof.amount).toLocaleString(undefined, {minimumFractionDigits:2}) + '</div>';
-        html += '    <div class="text-muted" style="font-size:11px">' + (proof.payment_method || '') + ' &bull; Submitted ' + proof.submitted_at + (proof.verified_at ? ' &bull; Verified ' + proof.verified_at : '') + '</div>';
-        if (proof.status === 'rejected' && proof.feedback) {
-          html += '    <div class="text-danger mt-1" style="font-size:11px"><i class="bi bi-exclamation-circle me-1"></i>' + proof.feedback + '</div>';
-        }
-        html += '  </div>';
-        html += '  <div class="d-flex align-items-center gap-2">';
-        html += PROOF_STATUS_BADGE[proof.status] || '';
-        html += '<button type="button" class="btn btn-sm btn-outline-secondary" style="font-size:11.5px" onclick="viewDocument(\'' + proof.proof_of_payment + '\', \'' + installmentLabel(p).replace(/'/g, "\\'") + '\')"><i class="bi bi-eye me-1"></i>View</button>';
-        html += '  </div>';
-        html += '</div>';
-      });
-      html += '  </div>';
+    html += '  <div class="d-flex align-items-center gap-2">' + state + proofActions(proof.proof_of_payment, proof.receipt_url, installmentLabel(p)) + '</div>';
+    if (proof.status === 'rejected' && proof.feedback) {
+      html += '<div class="tp-proof-feedback"><i class="bi bi-exclamation-circle-fill me-1"></i>School note: ' + esc(proof.feedback) + '</div>';
     }
-
     html += '</div>';
   });
 
+  html += '</div>';
+  return html;
+}
+
+// An installment with nothing submitted yet — a compact single row.
+function renderInstallmentRow(p, index) {
+  var html = '<div class="tp-row">';
+  html += '  <span class="tp-row-num">' + (p.installment_number === 0 ? '<i class="bi bi-star-fill" style="font-size:11px"></i>' : p.installment_number) + '</span>';
+  html += '  <div style="min-width:0;flex:1">';
+  html += '    <div style="font-size:13.5px;font-weight:600;color:var(--text-dark)">' + installmentLabel(p) + '</div>';
+  html += '    <div style="font-size:11.5px;color:' + (p.is_overdue ? '#b91c1c' : '#94a3b8') + '">Due ' + esc(p.due_date) + '</div>';
+  html += '  </div>';
+  html += '  <div class="tp-row-right d-flex align-items-center gap-3">';
+  html += '    <span class="tp-row-amount">' + peso(p.amount_due) + '</span>';
+  html += '    <span class="d-flex align-items-center gap-2">' + installmentPill(p) + (openBalance(p) > 0 ? payButton(p, index, 'tp-btn-dark', 'Pay Now') : '') + '</span>';
   html += '  </div>';
   html += '</div>';
-
   return html;
 }
 
@@ -164,6 +314,7 @@ function openSubmitPaymentModal(paymentId, label, paneIndex, remainingBalance) {
   document.getElementById('submitPaymentFileName').textContent = '';
   document.getElementById('submitPaymentError').classList.add('d-none');
   document.getElementById('submitPaymentError').textContent = '';
+  setSubmitPaymentMode(PAYMONGO_ENABLED ? 'online' : 'manual');
 
   var modalEl = document.getElementById('submitPaymentModal');
   var modal = bootstrap.Modal.getOrCreateInstance(modalEl);
@@ -194,6 +345,11 @@ function confirmSubmitPayment() {
   var fileInput = document.getElementById('submitPaymentFile');
   var amountInput = document.getElementById('submitPaymentAmount');
   var amount = parseFloat(amountInput.value);
+
+  if (submitPaymentMode === 'online') {
+    startOnlinePayment(amount, errorEl);
+    return;
+  }
 
   if (!methodInput) {
     errorEl.textContent = 'Please select a mode of payment.';
@@ -272,6 +428,71 @@ function confirmSubmitPayment() {
   });
 }
 
+// "Pay Online": asks the server for a PayMongo checkout for this amount and
+// sends the parent there. PayMongo brings them back to the return page,
+// which records the payment and lands them on this panel with ?payment=...
+function startOnlinePayment(amount, errorEl) {
+  var showError = function (msg) { errorEl.textContent = msg; errorEl.classList.remove('d-none'); };
+  var minAmount = Math.min(PAYMONGO_MIN_AMOUNT, tuitionRemainingBeingSubmitted);
+
+  if (!amount || amount <= 0) return showError('Please enter how much you\'re paying.');
+  if (amount < minAmount) return showError('The minimum online payment is ' + peso(minAmount) + '.');
+  if (amount > tuitionRemainingBeingSubmitted + 0.01) return showError('That\'s more than the ' + peso(tuitionRemainingBeingSubmitted) + ' remaining on this installment.');
+
+  var btn = document.getElementById('submitPaymentBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Opening checkout…';
+
+  fetch('{{ url("/tuition/payments") }}/' + tuitionPaymentBeingSubmitted + '/paymongo-checkout', {
+    method: 'POST',
+    headers: { 'X-CSRF-TOKEN': getCsrfToken(), 'X-Requested-With': 'XMLHttpRequest', 'Accept': 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ amount: amount }),
+  })
+  .then(function (r) { return r.json().then(function (data) { return { ok: r.ok, data: data }; }); })
+  .then(function (res) {
+    if (res.ok && res.data.checkout_url) {
+      window.location.href = res.data.checkout_url;
+      return;
+    }
+    btn.disabled = false;
+    setSubmitPaymentMode('online');
+    showError(res.data.message || 'Could not start the online payment. Please try again.');
+  })
+  .catch(function () {
+    btn.disabled = false;
+    setSubmitPaymentMode('online');
+    showError('Something went wrong. Please try again.');
+  });
+}
+
+// Back from PayMongo: /parent?panel=tuition-payments&payment=success|processing|cancelled
+function handlePaymentReturn() {
+  var params = new URLSearchParams(window.location.search);
+  var result = params.get('payment');
+  if (params.get('panel') !== 'tuition-payments' || !result) return;
+
+  showPanel('tuition-payments');
+
+  if (result === 'success') {
+    showToast('success', 'Payment received! It has been recorded on your account.');
+  } else if (result === 'cancelled') {
+    showToast('info', 'Payment cancelled. Nothing was charged.');
+  } else {
+    showToast('warning', 'Your payment is being confirmed. It will appear here in a few moments.');
+    // Give the webhook time to arrive, then refresh what's on screen.
+    [5000, 15000].forEach(function (delay) {
+      setTimeout(function () {
+        var pane = document.querySelector('.child-tuition-pane:not(.d-none)');
+        if (pane) loadTuitionPane(pane.id.replace('tuition-pane-', ''), pane.dataset.enrollmentId);
+        loadTuitionHistory();
+      }, delay);
+    });
+  }
+
+  // Don't repeat the message on refresh.
+  window.history.replaceState({}, '', window.location.pathname);
+}
+
 function loadTuitionHistory() {
   var loadingEl = document.getElementById('tuitionHistoryLoading');
   var contentEl = document.getElementById('tuitionHistoryContent');
@@ -284,7 +505,9 @@ function loadTuitionHistory() {
   })
   .then(function (r) { return r.json(); })
   .then(function (data) {
-    contentEl.innerHTML = renderTuitionHistory(data.history || []);
+    tuitionHistoryRows = data.history || [];
+    renderTuitionHistoryTabs();
+    contentEl.innerHTML = renderTuitionHistory(filteredTuitionHistory());
     loadingEl.classList.add('d-none');
     contentEl.classList.remove('d-none');
   })
@@ -296,26 +519,55 @@ function loadTuitionHistory() {
   });
 }
 
+var tuitionHistoryRows = [];
+var tuitionHistoryFilter = 'all';
+
+function filteredTuitionHistory() {
+  return tuitionHistoryFilter === 'all'
+    ? tuitionHistoryRows
+    : tuitionHistoryRows.filter(function (r) { return r.status === tuitionHistoryFilter; });
+}
+
+function renderTuitionHistoryTabs() {
+  var tabsEl = document.getElementById('tuitionHistoryTabs');
+  if (!tabsEl) return;
+
+  var count = function (status) { return tuitionHistoryRows.filter(function (r) { return r.status === status; }).length; };
+  var tabs = [['all', 'All'], ['verified', 'Verified (' + count('verified') + ')'], ['pending', 'Pending (' + count('pending') + ')']];
+  if (count('rejected')) tabs.push(['rejected', 'Needs Resubmit (' + count('rejected') + ')']);
+
+  tabsEl.innerHTML = tabs.map(function (t) {
+    var active = t[0] === tuitionHistoryFilter;
+    return '<button type="button" class="tp-tab' + (active ? ' active' : '') + '" role="tab" aria-selected="' + active + '" onclick="setTuitionHistoryFilter(\'' + t[0] + '\')">' + t[1] + '</button>';
+  }).join('');
+  tabsEl.classList.toggle('d-none', tuitionHistoryRows.length === 0);
+}
+
+function setTuitionHistoryFilter(status) {
+  tuitionHistoryFilter = status;
+  renderTuitionHistoryTabs();
+  document.getElementById('tuitionHistoryContent').innerHTML = renderTuitionHistory(filteredTuitionHistory());
+}
+
 function renderTuitionHistory(rows) {
   if (!rows.length) {
-    return '<div class="text-muted text-center py-4" style="font-size:13px">No payments submitted yet.</div>';
+    return '<div class="text-muted text-center py-4" style="font-size:13px">' +
+      (tuitionHistoryRows.length ? 'No payments in this view.' : 'No payments submitted yet.') + '</div>';
   }
 
-  var html = '<div class="table-responsive"><table class="table mb-0" style="font-size:13px">';
-  html += '<thead><tr class="text-muted" style="font-size:11px;text-transform:uppercase">';
-  html += '<th class="ps-3">Child</th><th>Payment</th><th>Amount</th><th>Mode</th><th>Submitted</th><th>Verified</th><th class="pe-3">Status</th>';
-  html += '</tr></thead><tbody>';
+  var html = '<div class="table-responsive"><table class="table tp-history mb-0">';
+  html += '<thead><tr><th>Child</th><th>Payment For</th><th>Amount</th><th>Mode</th><th>Submitted</th><th>Verified</th><th>Status</th><th class="text-end">Action</th></tr></thead><tbody>';
 
   rows.forEach(function (row) {
     html += '<tr>';
-    html += '<td class="ps-3">' + row.child + '</td>';
-    html += '<td>' + row.label + '</td>';
-    html += '<td>₱' + Number(row.amount).toLocaleString(undefined, {minimumFractionDigits:2}) + '</td>';
-    html += '<td>' + (row.payment_method || '—') + '</td>';
-    html += '<td>' + row.submitted_at + '</td>';
-    html += '<td>' + (row.verified_at || '—') + '</td>';
-    // History rows are now individual proofs — pending/verified/rejected.
-    html += '<td class="pe-3">' + (PROOF_STATUS_BADGE[row.status] || row.status) + '</td>';
+    html += '<td class="fw-semibold">' + esc(row.child) + '</td>';
+    html += '<td>' + esc(row.label) + '</td>';
+    html += '<td class="num">' + peso(row.amount) + '</td>';
+    html += '<td>' + (methodTag(row.payment_method) || '—') + (row.source === 'paymongo' ? '<div style="font-size:10.5px;color:#94a3b8;margin-top:3px">Paid online</div>' : '') + '</td>';
+    html += '<td class="date">' + esc(row.submitted_at) + '</td>';
+    html += '<td class="date">' + esc(row.verified_at || '—') + '</td>';
+    html += '<td>' + (PROOF_STATUS_BADGE[row.status] || esc(row.status)) + '</td>';
+    html += '<td class="text-end"><span class="d-inline-flex gap-1">' + proofActions(row.proof_url, row.receipt_url, row.label) + '</span></td>';
     html += '</tr>';
   });
 
@@ -331,5 +583,6 @@ document.addEventListener('DOMContentLoaded', function () {
   if (document.getElementById('tuitionHistoryContent')) {
     loadTuitionHistory();
   }
+  handlePaymentReturn();
 });
 </script>

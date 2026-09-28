@@ -11,6 +11,7 @@ use App\Http\Controllers\SectionController;
 use App\Http\Controllers\TuitionController;
 use App\Http\Controllers\PushSubscriptionController;
 use App\Http\Controllers\NotificationController;
+use App\Http\Controllers\PaymongoController;
 // ── PUBLIC ROUTES ─────────────────────────────────────────────────────────────
 Route::get('/',               [Authcontroller::class, 'landingpage'])->name('landingpage');
 Route::get('/logout',         [Authcontroller::class, 'logout'])->name('logout');
@@ -39,6 +40,10 @@ Route::post('/register',      [Authcontroller::class, 'register'])->name('regist
 Route::post('/forgot-password',       [Authcontroller::class, 'sendResetLinkEmail'])->name('password.email')->middleware('throttle:6,1');
 Route::post('/reset-password',        [Authcontroller::class, 'resetPassword'])->name('password.update')->middleware('throttle:6,1');
 
+// PayMongo server-to-server notifications — no session or CSRF token; only
+// trusted after PayMongo::verifySignature() (CSRF exemption in bootstrap/app.php).
+Route::post('/webhooks/paymongo', [PaymongoController::class, 'webhook'])->name('webhooks.paymongo');
+
 // ── PARENT ROUTES — protected by parent guard ──────────────────────────────────
 Route::middleware(['auth:parent'])->group(function () {
     Route::get('/parent', [Authcontroller::class, 'studentportal'])->name('parent.dashboard')->middleware('no.cache');
@@ -60,6 +65,11 @@ Route::middleware(['auth:parent'])->group(function () {
     Route::get('/tuition', [TuitionController::class, 'show'])->name('tuition.show');
     Route::get('/tuition/history', [TuitionController::class, 'history'])->name('tuition.history');
     Route::post('/tuition/payments/{payment}/upload-proof', [TuitionController::class, 'uploadProof'])->name('tuition.uploadProof');
+    Route::get('/tuition/proofs/{proof}/receipt', [TuitionController::class, 'parentReceipt'])->name('tuition.receipt');
+
+    // Online payment (PayMongo): start a checkout, and where PayMongo sends the parent back.
+    Route::post('/tuition/payments/{payment}/paymongo-checkout', [PaymongoController::class, 'checkout'])->name('tuition.paymongo.checkout')->middleware('throttle:10,1');
+    Route::get('/tuition/paymongo/return/{checkout}', [PaymongoController::class, 'return'])->name('tuition.paymongo.return');
 
  Route::post('/profile/upload-pic',      [Authcontroller::class, 'uploadProfilePic'])->name('parent.profile.uploadPic');
 Route::post('/profile/remove-pic',      [Authcontroller::class, 'removeProfilePic'])->name('parent.profile.removePic');
@@ -111,6 +121,7 @@ Route::middleware(['auth:web', 'role:admin'])->group(function () {
     // installment can now hold several partial proofs.
     Route::post('/admin/tuition/proofs/{proof}/verify', [TuitionController::class, 'verifyProof'])->name('admin.tuition.verify');
     Route::post('/admin/tuition/proofs/{proof}/reject', [TuitionController::class, 'rejectProof'])->name('admin.tuition.reject');
+    Route::get('/admin/tuition/proofs/{proof}/receipt', [TuitionController::class, 'adminReceipt'])->name('admin.tuition.receipt');
 
     // Direct balance override — corrects an installment's billed amount
     // itself, independent of any proof (data-entry fix, discount, waiver).

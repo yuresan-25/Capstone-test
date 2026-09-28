@@ -1239,14 +1239,23 @@ function toggleActionMenu(e, btn) {
   if (_openMenuWrap && _openMenuWrap !== wrap) _openMenuWrap.classList.remove('open');
   wrap.classList.toggle('open');
   _openMenuWrap = wrap.classList.contains('open') ? wrap : null;
-  if (_openMenuWrap) {
-    const dropdown = wrap.querySelector('.action-dropdown');
-    dropdown.classList.remove('dropup');
-    const rect = dropdown.getBoundingClientRect();
-    if (rect.bottom > window.innerHeight) dropdown.classList.add('dropup');
-  }
+  if (_openMenuWrap) positionActionMenu(btn, wrap.querySelector('.action-dropdown'));
 }
-document.addEventListener('click', () => { if (_openMenuWrap) { _openMenuWrap.classList.remove('open'); _openMenuWrap = null; } });
+// The dropdown is position: fixed (see layout CSS) so the table's overflow
+// can't clip it — place it under the button, right-aligned, or above the
+// button when there isn't room below.
+function positionActionMenu(btn, dropdown) {
+  const r = btn.getBoundingClientRect();
+  const below = r.bottom + 4;
+  const fitsBelow = below + dropdown.offsetHeight <= window.innerHeight - 8;
+  dropdown.style.top  = (fitsBelow ? below : Math.max(8, r.top - 4 - dropdown.offsetHeight)) + 'px';
+  dropdown.style.left = Math.max(8, r.right - dropdown.offsetWidth) + 'px';
+}
+function closeActionMenu() { if (_openMenuWrap) { _openMenuWrap.classList.remove('open'); _openMenuWrap = null; } }
+document.addEventListener('click', closeActionMenu);
+// A fixed menu wouldn't follow its row when the page or table scrolls.
+window.addEventListener('scroll', closeActionMenu, true);
+window.addEventListener('resize', closeActionMenu);
 function closeMenuThen(fn) { if (_openMenuWrap) { _openMenuWrap.classList.remove('open'); _openMenuWrap = null; } fn(); }
 
 /* ── Table filter ── */

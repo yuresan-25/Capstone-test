@@ -345,25 +345,20 @@ img.brand-logo {
 /* ============================================================
    18. THREE-DOT ACTION DROPDOWN
    ============================================================ */
-/* Bootstrap's .table-responsive sets overflow-x: auto, which browsers force
-   overflow-y to also become non-visible for (a well-known CSS quirk) — this
-   silently clips the absolutely-positioned dropdown below when a table has
-   few rows (nothing to scroll past yet). Horizontal scrolling still works
-   fine with overflow-y explicitly set back to visible. */
-.table-responsive { overflow-y: visible; }
-
+/* Bootstrap's .table-responsive sets overflow-x: auto, and browsers then
+   force overflow-y to non-visible too — so an absolutely-positioned menu in
+   the last rows gets clipped by the table's edge. The menu is therefore
+   position: fixed, placed next to its button by positionActionMenu() in the
+   page JS, which lets it escape any scrolling/overflow container. */
 .action-dropdown {
   display: none;
-  position: absolute; right: 0; top: calc(100% + 4px);
+  position: fixed;
   z-index: 9999;
   background: #fff; border: 1px solid var(--border);
   border-radius: 10px; min-width: 170px;
   padding: 6px 0; overflow: hidden;
 }
 .action-menu-wrap.open .action-dropdown { display: block; }
-/* Flipped upward via JS when there isn't enough room below (e.g. last row
-   in a short mobile viewport, inside a horizontally-scrolling table). */
-.action-dropdown.dropup { top: auto; bottom: calc(100% + 4px); }
 
 .action-item {
   display: flex; align-items: center; gap: 9px;

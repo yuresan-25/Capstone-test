@@ -1034,7 +1034,7 @@ body { margin:0; background:#f1f5f9; }
   <div class="modal-dialog modal-dialog-centered">
     <div class="modal-content border-0 shadow-lg" style="border-radius:16px;overflow:hidden">
       <div class="modal-header border-0 pb-0">
-        <h5 class="modal-title fw-bold" style="color:#991b1b"><i class="bi bi-arrow-repeat me-2"></i>Flag for Resubmit</h5>
+        <h5 class="modal-title fw-bold" style="color:#991b1b"><i class="bi bi-arrow-repeat me-2"></i>Request Resubmit</h5>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body">
@@ -1426,7 +1426,7 @@ body { margin:0; background:#f1f5f9; }
                   @endif
                   @if($doc->status !== 'needs_resubmit' && !in_array($p->status, ['approved', 'enrolled']))
                   <button type="button" class="btn btn-outline-danger btn-sm" style="font-size:12px" onclick="openResubmitModal({{ $doc->id }}, '{{ addslashes($doc->document_label) }}')">
-                    <i class="bi bi-arrow-repeat me-1"></i>Flag for Resubmit
+                    <i class="bi bi-arrow-repeat me-1"></i>Resubmit
                   </button>
                   @endif
                 </div>
@@ -1448,7 +1448,7 @@ body { margin:0; background:#f1f5f9; }
               @foreach($p->tuitionPlan->payments->sortBy('installment_number') as $pay)
               @php
                 $payLabel = $pay->installment_number === 0 ? 'Upon Enrollment (Down Payment)' : 'Installment ' . $pay->installment_number;
-                $payMethodLabels = ['gcash'=>'GCash','maya'=>'Maya','bank_transfer'=>'Bank Transfer','cash'=>'Cash'];
+                $payMethodLabels = ['gcash'=>'GCash','maya'=>'Maya','bank_transfer'=>'Bank Transfer','cash'=>'Cash','card'=>'Card','online_banking'=>'Online Banking'];
                 $verifiedAmount = $pay->verifiedAmount();
                 $remaining = $pay->remainingBalance();
                 $proofsSorted = $pay->proofs->sortByDesc('submitted_at');
@@ -1489,8 +1489,14 @@ body { margin:0; background:#f1f5f9; }
                       <div style="font-size:12.5px;font-weight:600;color:#1e293b">₱{{ number_format($proof->amount, 2) }}</div>
                       <div class="text-muted mt-1" style="font-size:11px">
                         <i class="bi bi-credit-card me-1"></i>{{ $payMethodLabels[$proof->payment_method] ?? $proof->payment_method }}
+                        @if($proof->isOnline())
+                        &bull; Paid online {{ $proof->submitted_at->format('M j, Y g:i A') }}
+                        &bull; PayMongo ref {{ $proof->paymongo_payment_id }}
+                        @if($proof->gateway_fee !== null) &bull; Fee ₱{{ number_format($proof->gateway_fee, 2) }} @endif
+                        @else
                         &bull; Submitted {{ $proof->submitted_at->format('M j, Y g:i A') }}
                         @if($proof->verified_at) &bull; Verified {{ $proof->verified_at->format('M j, Y g:i A') }} @endif
+                        @endif
                       </div>
                       @if($proof->status === 'rejected' && $proof->feedback)
                       <div class="mt-2" style="font-size:11.5px;color:#991b1b;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:6px 8px">
@@ -1499,18 +1505,26 @@ body { margin:0; background:#f1f5f9; }
                       @endif
                     </div>
                     <div class="d-flex align-items-center gap-2 flex-shrink-0">
+                      @if($proof->isOnline())
+                        <span class="badge rounded-pill px-2" style="background:#e8ecf7;color:#1a2a5e;font-size:11px"><i class="bi bi-lightning-charge-fill me-1"></i>PayMongo</span>
+                      @endif
                       @if($proof->status === 'verified')
                         <span class="badge-approved">Verified</span>
                       @elseif($proof->status === 'rejected')
                         <span class="badge rounded-pill px-2" style="background:#fee2e2;color:#991b1b;font-size:11px">Rejected</span>
                       @endif
-                      <button type="button" class="btn btn-outline-secondary btn-sm" style="font-size:11.5px" onclick="showImagePreview('{{ asset('storage/' . $proof->proof_of_payment) }}', '{{ addslashes($payLabel) }} — ₱{{ number_format($proof->amount, 2) }}')"><i class="bi bi-eye me-1"></i>View</button>
+                      @if($proof->proof_of_payment)
+                      <button type="button" class="btn btn-outline-secondary btn-sm" style="font-size:12px" onclick="showImagePreview('{{ asset('storage/' . $proof->proof_of_payment) }}', '{{ addslashes($payLabel) }} — ₱{{ number_format($proof->amount, 2) }}')"><i class="bi bi-eye me-1"></i>View</button>
+                      @endif
+                      @if($proof->status === 'verified')
+                      <a class="btn btn-outline-secondary btn-sm" style="font-size:12px" href="{{ route('admin.tuition.receipt', $proof) }}" target="_blank" rel="noopener"><i class="bi bi-receipt me-1"></i>Receipt</a>
+                      @endif
                       @if($proof->status === 'pending')
-                      <button type="button" class="btn btn-success btn-sm" style="font-size:11.5px" onclick="openVerifyProofModal({{ $proof->id }}, '{{ addslashes($payLabel) }}', {{ $proof->amount }})">
+                      <button type="button" class="btn btn-success btn-sm" style="font-size:12px" onclick="openVerifyProofModal({{ $proof->id }}, '{{ addslashes($payLabel) }}', {{ $proof->amount }})">
                         <i class="bi bi-check-lg me-1"></i>Verify
                       </button>
-                      <button type="button" class="btn btn-outline-danger btn-sm" style="font-size:11.5px" onclick="openResubmitModal({{ $proof->id }}, '{{ $payLabel }} (₱{{ number_format($proof->amount, 2) }})', true)">
-                        <i class="bi bi-arrow-repeat me-1"></i>Reject
+                      <button type="button" class="btn btn-outline-danger btn-sm" style="font-size:12px" onclick="openResubmitModal({{ $proof->id }}, '{{ $payLabel }} (₱{{ number_format($proof->amount, 2) }})', true)">
+                        <i class="bi bi-arrow-repeat me-1"></i>Resubmit
                       </button>
                       @endif
                     </div>
@@ -1524,19 +1538,49 @@ body { margin:0; background:#f1f5f9; }
           </div>
           @endif
 
-          {{-- Proof of Payment --}}
+          {{-- Proof of Payment — the Step 1 enrollment-fee receipt. It's
+               also the down payment's (installment 0) first proof row, so
+               Verify / Resubmit act on that proof through the same tuition
+               proof endpoints as every other installment. --}}
           @if($p->proof_of_payment)
+          @php
+            $pDownPayment = $p->tuitionPlan?->payments->firstWhere('installment_number', 0);
+            $pDownProof   = $pDownPayment?->proofs->sortByDesc('submitted_at')->first();
+          @endphp
           <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden">
             <div style="padding:12px 16px;background:#f1f5f9;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;gap:8px">
               <div style="width:28px;height:28px;border-radius:8px;background:#7c3aed;display:flex;align-items:center;justify-content:center;font-size:13px;color:#fff"><i class="bi bi-receipt"></i></div>
               <span style="font-size:13px;font-weight:700;color:#1e293b">Proof of Payment</span>
             </div>
-            <div style="padding:14px 16px">
-              <button type="button" onclick="showImagePreview('{{ asset('storage/' . $p->proof_of_payment) }}', 'Proof of Payment')"
-                 style="display:inline-flex;align-items:center;gap:6px;background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe;font-size:12px;font-weight:600;padding:6px 14px;border-radius:8px">
-                <i class="bi bi-file-earmark me-1"></i>View Payment Proof
-                <i class="bi bi-eye"></i>
-              </button>
+            <div class="d-flex align-items-center justify-content-between flex-wrap gap-2" style="padding:14px 16px">
+              <div style="min-width:0;flex:1">
+                <div style="font-size:13px;font-weight:600;color:#1e293b">Enrollment Fee (Down Payment)@if($pDownPayment) — ₱{{ number_format($pDownPayment->amount_due, 2) }}@endif</div>
+                <div class="mt-1">
+                  @if($pDownProof?->status === 'verified')
+                    <span class="badge-approved">Verified</span>
+                  @elseif($pDownProof?->status === 'rejected')
+                    <span class="badge-resubmit">Needs Resubmit</span>
+                  @else
+                    <span class="badge-pending">Pending Review</span>
+                  @endif
+                </div>
+                @if($pDownProof?->status === 'rejected' && $pDownProof->feedback)
+                <div class="mt-2" style="font-size:12px;color:#991b1b;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:8px 10px">
+                  <i class="bi bi-exclamation-circle-fill me-1"></i>{{ $pDownProof->feedback }}
+                </div>
+                @endif
+              </div>
+              <div class="d-flex align-items-center gap-2 flex-shrink-0">
+                <button type="button" class="btn btn-outline-secondary btn-sm" style="font-size:12px" onclick="showImagePreview('{{ asset('storage/' . $p->proof_of_payment) }}', 'Proof of Payment')"><i class="bi bi-eye me-1"></i>View</button>
+                @if($pDownProof?->status === 'pending')
+                <button type="button" class="btn btn-success btn-sm" style="font-size:12px" onclick="openVerifyProofModal({{ $pDownProof->id }}, 'Enrollment Fee (Down Payment)', {{ $pDownProof->amount }})">
+                  <i class="bi bi-check-lg me-1"></i>Verify
+                </button>
+                <button type="button" class="btn btn-outline-danger btn-sm" style="font-size:12px" onclick="openResubmitModal({{ $pDownProof->id }}, 'the enrollment fee proof of payment', true)">
+                  <i class="bi bi-arrow-repeat me-1"></i>Resubmit
+                </button>
+                @endif
+              </div>
             </div>
           </div>
           @endif
@@ -1903,13 +1947,13 @@ function showImagePreview(url, title) {
   });
 })();
 
-// Same stacking fix as imagePreviewModal above — verifyProofModal and
-// adjustAmountModal are both opened from buttons inside the profile modal
-// (see the Tuition Payments section), so without this they render behind
-// the profile modal's backdrop: visually just a darkened screen with
-// nothing clickable on top.
+// Same stacking fix as imagePreviewModal above — verifyProofModal,
+// adjustAmountModal and resubmitFeedbackModal are all opened from buttons
+// inside the profile modal, so without this they render behind the profile
+// modal's backdrop: visually just a darkened screen with nothing clickable
+// on top.
 (function () {
-  ['verifyProofModal', 'adjustAmountModal'].forEach(function (id) {
+  ['verifyProofModal', 'adjustAmountModal', 'resubmitFeedbackModal'].forEach(function (id) {
     const el = document.getElementById(id);
     if (!el) return;
     el.addEventListener('shown.bs.modal', function () {
@@ -2411,14 +2455,23 @@ function toggleActionMenu(e, btn) {
   if (_openMenuWrap && _openMenuWrap !== wrap) _openMenuWrap.classList.remove('open');
   wrap.classList.toggle('open');
   _openMenuWrap = wrap.classList.contains('open') ? wrap : null;
-  if (_openMenuWrap) {
-    const dropdown = wrap.querySelector('.action-dropdown');
-    dropdown.classList.remove('dropup');
-    const rect = dropdown.getBoundingClientRect();
-    if (rect.bottom > window.innerHeight) dropdown.classList.add('dropup');
-  }
+  if (_openMenuWrap) positionActionMenu(btn, wrap.querySelector('.action-dropdown'));
 }
-document.addEventListener('click', () => { if (_openMenuWrap) { _openMenuWrap.classList.remove('open'); _openMenuWrap = null; } });
+// The dropdown is position: fixed (see layout CSS) so the table's overflow
+// can't clip it — place it under the button, right-aligned, or above the
+// button when there isn't room below.
+function positionActionMenu(btn, dropdown) {
+  const r = btn.getBoundingClientRect();
+  const below = r.bottom + 4;
+  const fitsBelow = below + dropdown.offsetHeight <= window.innerHeight - 8;
+  dropdown.style.top  = (fitsBelow ? below : Math.max(8, r.top - 4 - dropdown.offsetHeight)) + 'px';
+  dropdown.style.left = Math.max(8, r.right - dropdown.offsetWidth) + 'px';
+}
+function closeActionMenu() { if (_openMenuWrap) { _openMenuWrap.classList.remove('open'); _openMenuWrap = null; } }
+document.addEventListener('click', closeActionMenu);
+// A fixed menu wouldn't follow its row when the page or table scrolls.
+window.addEventListener('scroll', closeActionMenu, true);
+window.addEventListener('resize', closeActionMenu);
 function closeMenuThen(fn) { if (_openMenuWrap) { _openMenuWrap.classList.remove('open'); _openMenuWrap = null; } fn(); }
 
 /* ── Table search ── */

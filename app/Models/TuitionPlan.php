@@ -67,7 +67,7 @@ class TuitionPlan extends Model
         // starts 'pending' (awaiting admin review), exactly like every other
         // installment, instead of being auto-trusted.
         if ($downPayment > 0) {
-            $plan->payments()->create([
+            $downPaymentRow = $plan->payments()->create([
                 'installment_number' => 0,
                 'amount_due'         => $downPayment,
                 'due_date'           => now(),
@@ -76,6 +76,19 @@ class TuitionPlan extends Model
                 'payment_method'     => $enrollment->payment_method,
                 'submitted_at'       => now(),
             ]);
+
+            // The Step 1 receipt is also this installment's first proof, so
+            // the admin can Verify / Resubmit it through the same per-proof
+            // flow as every other installment.
+            if ($enrollment->proof_of_payment) {
+                $downPaymentRow->proofs()->create([
+                    'amount'           => $downPayment,
+                    'payment_method'   => $enrollment->payment_method ?? 'cash',
+                    'proof_of_payment' => $enrollment->proof_of_payment,
+                    'status'           => 'pending',
+                    'submitted_at'     => now(),
+                ]);
+            }
         }
 
         $count   = self::INSTALLMENT_COUNTS[$enrollment->payment_plan] ?? 4;

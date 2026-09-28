@@ -52,6 +52,7 @@ class TuitionController extends Controller
 
         return response()->json([
             'plan'     => [
+                'school_year'       => \App\Models\EnrollmentPeriod::current()?->school_year,
                 'plan_type'         => $plan->plan_type,
                 'total_amount'      => $totalAmount,
                 'down_payment'      => (float) $plan->down_payment,
@@ -77,6 +78,10 @@ class TuitionController extends Controller
                     'status'             => $p->status, // unpaid | partial | paid
                     'verified_amount'    => $verifiedAmount,
                     'remaining_balance'  => $remaining,
+                    // Submitted but not yet reviewed — lets the UI say
+                    // "under review" instead of asking the parent to pay again.
+                    'pending_amount'     => (float) $p->proofs->where('status', 'pending')->sum('amount'),
+                    'is_overdue'         => $remaining > 0 && $p->installment_number > 0 && $p->due_date->isPast(),
                     'feedback'           => $p->feedback,
                     // A parent can submit proof for any amount up to what's
                     // left, any number of times, until the balance hits 0.
@@ -89,7 +94,11 @@ class TuitionController extends Controller
                         'amount'           => (float) $proof->amount,
                         'status'           => $proof->status, // pending | verified | rejected
                         'payment_method'   => self::methodLabel($proof->payment_method),
-                        'proof_of_payment' => asset('storage/' . $proof->proof_of_payment),
+                        // null for online (PayMongo) payments — no uploaded image.
+                        'proof_of_payment' => $proof->proof_of_payment ? asset('storage/' . $proof->proof_of_payment) : null,
+                        'source'           => $proof->source,
+                        'reference'        => $proof->paymongo_payment_id,
+                        'receipt_url'      => $proof->status === 'verified' ? route('tuition.receipt', $proof) : null,
                         'submitted_at'     => $proof->submitted_at->format('M j, Y g:i A'),
                         'verified_at'      => $proof->verified_at?->format('M j, Y g:i A'),
                         'feedback'         => $proof->feedback,
@@ -137,13 +146,17 @@ class TuitionController extends Controller
                         'submitted_at'   => $proof->submitted_at->format('M j, Y g:i A'),
                         'verified_at'    => $proof->verified_at?->format('M j, Y g:i A'),
                         'status'         => $proof->status,
+                        'proof_url'      => $proof->proof_of_payment ? asset('storage/' . $proof->proof_of_payment) : null,
+                        'source'         => $proof->source,
+                        'receipt_url'    => $proof->status === 'verified' ? route('tuition.receipt', $proof) : null,
+                        'sort_key'       => $proof->submitted_at->timestamp,
                     ]);
                 }
             }
         }
 
         return response()->json([
-            'history' => $rows->sortByDesc('submitted_at')->values(),
+            'history' => $rows->sortByDesc('sort_key')->values(),
         ]);
     }
 
@@ -154,8 +167,68 @@ class TuitionController extends Controller
             'maya'          => 'Maya',
             'bank_transfer' => 'Bank Transfer',
             'cash'          => 'Cash',
+            'card'          => 'Card',
+            'online_banking' => 'Online Banking',
             default         => $method,
         };
+    }
+
+    /**
+     * GET /tuition/proofs/{proof}/receipt
+     * Parent downloads the acknowledgment receipt for one of their own
+     * verified payments (online or admin-verified upload).
+     */
+    public function parentReceipt(TuitionPaymentProof $proof)
+    {
+        $parent = Auth::guard('parent')->user();
+
+        if ($proof->payment->plan->enrollment->user_id !== $parent->id) {
+            abort(403, 'You do not have permission to view this receipt.');
+        }
+
+        return $this->receiptPdf($proof);
+    }
+
+    /** GET /admin/tuition/proofs/{proof}/receipt */
+    public function adminReceipt(Request $request, TuitionPaymentProof $proof)
+    {
+        if (! $request->user()->canManageGrade($proof->payment->plan->enrollment->grade_level)) {
+            abort(403, 'You are not assigned to manage this student\'s grade level.');
+        }
+
+        return $this->receiptPdf($proof);
+    }
+
+    /**
+     * Acknowledgment receipt PDF — confirms the school received and verified
+     * this payment. Not a BIR official receipt; the footer says so.
+     */
+    private function receiptPdf(TuitionPaymentProof $proof)
+    {
+        abort_unless($proof->status === 'verified', 404, 'A receipt is only available once the payment is verified.');
+
+        $payment = $proof->payment;
+        $enrollment = $payment->plan->enrollment;
+        $parent = $enrollment->user;
+
+        $logoPath = public_path('photo/logo.png');
+        $logoData = is_file($logoPath) ? 'data:image/png;base64,' . base64_encode(file_get_contents($logoPath)) : null;
+
+        $pdf = \Barryvdh\DomPDF\Facade\Pdf::loadView('receipts.payment-acknowledgment', [
+            'proof'       => $proof,
+            'payment'     => $payment,
+            'enrollment'  => $enrollment,
+            'parentName'  => trim(($parent->first_name ?? '') . ' ' . ($parent->last_name ?? '')),
+            'label'       => $payment->installment_number === 0 ? 'Upon Enrollment (Down Payment)' : 'Installment ' . $payment->installment_number,
+            'method'      => self::methodLabel($proof->payment_method),
+            'schoolYear'  => \App\Models\EnrollmentPeriod::current()?->school_year,
+            'remaining'   => $payment->remainingBalance(),
+            'verifier'    => $proof->verifier ? trim(($proof->verifier->first_name ?? '') . ' ' . ($proof->verifier->last_name ?? '')) : null,
+            'logoData'    => $logoData,
+            'generatedAt' => now()->format('M d, Y g:i A'),
+        ])->setPaper('a5', 'portrait');
+
+        return $pdf->stream($proof->receiptNumber() . '.pdf');
     }
 
     /**
@@ -331,6 +404,10 @@ class TuitionController extends Controller
             'verified_at' => null,
             'verified_by' => null,
         ]);
+
+        // Moves a down payment out of its initial 'pending' state (other
+        // installments are already derived from their proofs).
+        $payment->refreshStatus();
 
         \App\Models\ActivityLog::record(
             $request->user(),
