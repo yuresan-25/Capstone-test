@@ -278,38 +278,16 @@ class TuitionController extends Controller
             'submitted_at'       => now(),
         ]);
 
-        // Notification failures must never turn an already-saved upload
-        // into a 500 for the parent — the proof row above is committed
-        // by this point regardless of what happens here.
-        try {
-            $this->notifyAdminsOfProofSubmission($proof);
-        } catch (\Throwable $e) {
-            report($e);
-        }
+        // Never throws — a failed alert can't turn a saved upload into a 500.
+        \App\Support\AdminNotifier::send(
+            new \App\Notifications\TuitionProofSubmitted($proof),
+            $payment->plan->enrollment->grade_level
+        );
 
         return response()->json([
             'success' => true,
             'message' => 'Proof of payment submitted. Awaiting admin verification.',
         ]);
-    }
-
-    /**
-     * Notifies every admin scoped to manage this student's grade level
-     * (same canManageGrade() rule enforced on verifyProof()/rejectProof()),
-     * plus every superadmin, who oversee all grades.
-     */
-    private function notifyAdminsOfProofSubmission(TuitionPaymentProof $proof): void
-    {
-        $grade = $proof->payment->plan->enrollment->grade_level;
-
-        $admins = \App\Models\User::whereIn('role', ['admin', 'superadmin'])
-            ->get()
-            ->filter(fn ($admin) => $admin->isSuperAdmin() || $admin->canManageGrade($grade));
-
-        \Illuminate\Support\Facades\Notification::send(
-            $admins,
-            new \App\Notifications\TuitionProofSubmitted($proof)
-        );
     }
 
     /**

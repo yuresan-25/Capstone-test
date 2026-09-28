@@ -36,6 +36,35 @@ class PayMongo
         return filled(config('services.paymongo.secret_key'));
     }
 
+    /** True when running live keys (sk_live_...), false for test keys. */
+    public static function liveMode(): bool
+    {
+        return str_starts_with((string) config('services.paymongo.secret_key'), 'sk_live_');
+    }
+
+    /**
+     * Asks PayMongo for this checkout's current state and records it if it
+     * was paid. Used by the return page and the scheduled reconcile, so a
+     * payment is still recorded when the parent closed the tab or the
+     * webhook never arrived. Marks checkouts PayMongo has expired.
+     *
+     * @return array|null  the checkout_session resource (null if not started)
+     */
+    public static function syncCheckout(PaymongoCheckout $checkout): ?array
+    {
+        if ($checkout->status !== 'pending' || ! $checkout->checkout_session_id) {
+            return null;
+        }
+
+        $session = self::retrieveCheckoutSession($checkout->checkout_session_id);
+
+        if (! self::recordPaidCheckout($checkout, $session) && data_get($session, 'attributes.status') === 'expired') {
+            $checkout->update(['status' => 'expired']);
+        }
+
+        return $session;
+    }
+
     private static function client(): PendingRequest
     {
         return Http::withBasicAuth((string) config('services.paymongo.secret_key'), '')
@@ -142,6 +171,14 @@ class PayMongo
             }
 
             $attrs = data_get($paid, 'attributes', []);
+
+            // The checkout's amount is fixed server-side, so these should
+            // always match; a mismatch is worth a look, but what PayMongo
+            // actually charged is what gets recorded.
+            $chargedCentavos = (int) $attrs['amount'];
+            if ($chargedCentavos !== (int) round((float) $locked->amount * 100)) {
+                \Illuminate\Support\Facades\Log::warning("PayMongo charged {$chargedCentavos} centavos for checkout #{$locked->id}, expected " . round((float) $locked->amount * 100));
+            }
             // Carbon 3 reads unix timestamps as UTC unless told otherwise.
             $paidAt = isset($attrs['paid_at']) ? \Carbon\Carbon::createFromTimestamp($attrs['paid_at'], config('app.timezone')) : now();
             $sourceType = data_get($attrs, 'source.type');
@@ -179,6 +216,10 @@ class PayMongo
                     . ' (₱' . number_format((float) $proof->amount, 2) . ' via PayMongo, ' . $paymentId . ')',
                 'success'
             );
+
+            // Only reached for a newly recorded payment — repeat calls for the
+            // same checkout return early above, so admins get one alert each.
+            AdminNotifier::send(new \App\Notifications\OnlinePaymentReceived($proof), $enrollment->grade_level);
 
             return $proof;
         });

@@ -12,3 +12,8 @@ Artisan::command('inspire', function () {
 // calendar day per installment (see SendTuitionReminders), so running it
 // more often wouldn't send anything extra, just waste a query.
 Schedule::command('tuition:send-reminders')->dailyAt('08:00');
+
+// Safety net for online payments: confirms any unfinished PayMongo checkout
+// directly with PayMongo, in case the parent closed the tab before being
+// sent back and the webhook never arrived (e.g. running on localhost).
+Schedule::command('paymongo:reconcile')->everyFiveMinutes()->withoutOverlapping();

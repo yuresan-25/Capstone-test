@@ -8,7 +8,9 @@ use App\Support\PayMongo;
 use Illuminate\Http\Client\RequestException;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\URL;
 
 class PaymongoController extends Controller
 {
@@ -59,6 +61,48 @@ class PaymongoController extends Controller
         ]);
 
         $amount = round((float) $request->input('amount'), 2);
+
+        // One checkout at a time per installment: a double click, a second
+        // tab or a Back-and-retry gets the same PayMongo page instead of a
+        // second one the parent could also pay.
+        $lock = Cache::lock('paymongo-checkout-' . $payment->id, 15);
+        if (! $lock->get()) {
+            return response()->json(['message' => 'Your payment page is already opening. Please wait a moment.'], 429);
+        }
+
+        try {
+            return $this->openCheckout($payment, $enrollment, $parent, $amount);
+        } finally {
+            $lock->release();
+        }
+    }
+
+    private function openCheckout(TuitionPayment $payment, $enrollment, $parent, float $amount)
+    {
+        $recent = PaymongoCheckout::where('tuition_payment_id', $payment->id)
+            ->where('status', 'pending')
+            ->whereNotNull('checkout_session_id')
+            ->where('amount', $amount)
+            ->where('created_at', '>=', now()->subMinutes(30))
+            ->latest('id')
+            ->first();
+
+        if ($recent) {
+            try {
+                $session = PayMongo::syncCheckout($recent);
+                $recent->refresh();
+
+                if ($recent->status === 'paid') {
+                    return response()->json(['message' => 'This payment was already received. Refresh the page to see it.'], 409);
+                }
+                if ($recent->status === 'pending' && data_get($session, 'attributes.checkout_url')) {
+                    return response()->json(['checkout_url' => data_get($session, 'attributes.checkout_url')]);
+                }
+            } catch (\Throwable $e) {
+                report($e); // fall through and open a fresh checkout
+            }
+        }
+
         $label = $payment->installment_number === 0 ? 'Enrollment Fee' : 'Installment ' . $payment->installment_number;
         $childName = trim($enrollment->first_name . ' ' . $enrollment->last_name);
 
@@ -86,8 +130,9 @@ class PaymongoController extends Controller
                     'name'  => trim(($parent->first_name ?? '') . ' ' . ($parent->last_name ?? '')) ?: null,
                     'email' => $parent->email,
                 ]),
-                'success_url' => route('tuition.paymongo.return', $checkout),
-                'cancel_url'  => route('tuition.paymongo.return', ['checkout' => $checkout, 'cancelled' => 1]),
+                // Signed: the return page works without a login session.
+                'success_url' => URL::signedRoute('tuition.paymongo.return', ['checkout' => $checkout]),
+                'cancel_url'  => URL::signedRoute('tuition.paymongo.return', ['checkout' => $checkout, 'cancelled' => 1]),
                 'metadata'    => [
                     'paymongo_checkout_id' => (string) $checkout->id,
                     'tuition_payment_id'   => (string) $payment->id,
@@ -113,11 +158,9 @@ class PaymongoController extends Controller
      */
     public function return(Request $request, PaymongoCheckout $checkout)
     {
-        $parent = Auth::guard('parent')->user();
-
-        if ($checkout->payment->plan->enrollment->user_id !== $parent->id) {
-            abort(403);
-        }
+        // No ownership check against the logged-in parent here on purpose —
+        // the signed URL proves PayMongo (via our own checkout) sent them,
+        // and the parent's session may have expired during a long checkout.
 
         // The enrollment fee is paid before approval, when Tuition & Payments
         // is still locked — send those parents back to Home instead.
@@ -135,15 +178,13 @@ class PaymongoController extends Controller
             return $to('success');
         }
 
-        if ($checkout->checkout_session_id) {
-            try {
-                $session = PayMongo::retrieveCheckoutSession($checkout->checkout_session_id);
-                if (PayMongo::recordPaidCheckout($checkout, $session)) {
-                    return $to('success');
-                }
-            } catch (\Throwable $e) {
-                report($e);
+        try {
+            PayMongo::syncCheckout($checkout);
+            if ($checkout->refresh()->status === 'paid') {
+                return $to('success');
             }
+        } catch (\Throwable $e) {
+            report($e);
         }
 
         // Paid on PayMongo's side but not confirmed yet — the webhook (or the
@@ -165,6 +206,13 @@ class PaymongoController extends Controller
         if (! PayMongo::verifySignature($request->header('Paymongo-Signature'), $raw, $livemode)) {
             Log::warning('PayMongo webhook rejected: invalid signature.');
             return response()->json(['message' => 'Invalid signature.'], 400);
+        }
+
+        // A test-mode payment must never count on a live system (or the
+        // reverse). Acknowledged so PayMongo stops retrying, but ignored.
+        if ($livemode !== PayMongo::liveMode()) {
+            Log::warning('PayMongo webhook ignored: ' . ($livemode ? 'live' : 'test') . ' event but the app uses ' . (PayMongo::liveMode() ? 'live' : 'test') . ' keys.');
+            return response()->json(['received' => true, 'ignored' => 'mode mismatch']);
         }
 
         if (data_get($event, 'data.attributes.type') === 'checkout_session.payment.paid') {

@@ -26,22 +26,49 @@ $scopedGrades  = $currentAdmin->assigned_grades ?: null;
 $allGradeLevelOptions = ['Kinder','Grade 1','Grade 2','Grade 3','Grade 4','Grade 5','Grade 6','Grade 7','Grade 8','Grade 9','Grade 10'];
 $gradeLevelOptions    = $scopedGrades ? array_values(array_intersect($allGradeLevelOptions, $scopedGrades)) : $allGradeLevelOptions;
 
-/* ── Real DB data ── */
-$applications = StudentEnrollment::with('user')
-    ->where('status', 'pending')
-    ->when($scopedGrades, fn ($q) => $q->whereIn('grade_level', $scopedGrades))
+/* ── Real DB data ──
+   Both tables are paginated (25 per page) with a server-side search, and
+   every installment's proofs are loaded up front — previously the page
+   loaded every student and ran ~11 queries per student (5,500+ queries and
+   ~2s at 1,000 students). Statistics below use COUNT queries instead of
+   the full lists, so they still cover every student, not just one page. */
+$perPage   = 25;
+$appSearch = trim((string) request('app_q', ''));
+$stuSearch = trim((string) request('stu_q', ''));
+
+// Name / LRN search: "dela cruz", "Juan", "Cruz, Juan" or an LRN.
+$nameSearch = function ($q, string $term) {
+    $like = '%' . str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $term) . '%';
+    $q->where(fn ($w) => $w->where('first_name', 'like', $like)
+        ->orWhere('last_name', 'like', $like)
+        ->orWhere('lrn', 'like', $like)
+        ->orWhereRaw("CONCAT(first_name, ' ', last_name) LIKE ?", [$like])
+        ->orWhereRaw("CONCAT(last_name, ', ', first_name) LIKE ?", [$like]));
+};
+
+$pendingBase  = StudentEnrollment::where('status', 'pending')
+    ->when($scopedGrades, fn ($q) => $q->whereIn('grade_level', $scopedGrades));
+$studentsBase = StudentEnrollment::whereIn('status', ['approved', 'enrolled'])
+    ->when($scopedGrades, fn ($q) => $q->whereIn('grade_level', $scopedGrades));
+
+$applications = (clone $pendingBase)
+    ->when($appSearch !== '', fn ($q) => $nameSearch($q, $appSearch))
+    ->with('user')
     ->orderByDesc('created_at')
-    ->get();
+    ->paginate($perPage, ['*'], 'app_page')
+    ->appends(['tab' => 'applications', 'app_q' => $appSearch ?: null]);
 
-$students = StudentEnrollment::with(['user', 'tuitionPlan.payments'])
-    ->whereIn('status', ['approved', 'enrolled'])
-    ->when($scopedGrades, fn ($q) => $q->whereIn('grade_level', $scopedGrades))
+$students = (clone $studentsBase)
+    ->when($stuSearch !== '', fn ($q) => $nameSearch($q, $stuSearch))
+    ->with(['user', 'tuitionPlan.payments.proofs'])
     ->orderBy('last_name')
-    ->get();
+    ->orderBy('first_name')
+    ->paginate($perPage, ['*'], 'stu_page')
+    ->appends(['tab' => 'students', 'stu_q' => $stuSearch ?: null]);
 
-/* ── Stats ── */
-$totalStudents = $students->count();
-$pendingCount  = $applications->count();
+/* ── Stats (whole school, not just the current page or search) ── */
+$totalStudents = (clone $studentsBase)->count();
+$pendingCount  = (clone $pendingBase)->count();
 
 /* ──────────────────────────────────────────────────────
    SECTIONS — real, persisted (see SectionController::generate).
@@ -83,15 +110,15 @@ $gradeConfig = [
 ────────────────────────────────────────────────────── */
 
 /* Enrollment by Grade (approved/enrolled students, grouped by grade_level) */
-$gradeCountsRaw   = $students->groupBy('grade_level')->map->count();
+$gradeCountsRaw   = (clone $studentsBase)->selectRaw('grade_level, COUNT(*) as total')->groupBy('grade_level')->pluck('total', 'grade_level');
 $chartGradeLabels = array_keys($gradeConfig);
 $chartGradeData   = array_map(fn($g) => $gradeCountsRaw[$g] ?? 0, $chartGradeLabels);
 
-/* Gender distribution (approved/enrolled students)
-   NOTE: assumes a `sex` column storing 'Male'/'Female' (or 'M'/'F').
-   If the actual column name differs, update the two lines below. */
-$maleCount   = $students->filter(fn($s) => strtoupper(substr((string) ($s->sex ?? ''), 0, 1)) === 'M')->count();
-$femaleCount = $students->filter(fn($s) => strtoupper(substr((string) ($s->sex ?? ''), 0, 1)) === 'F')->count();
+/* Gender distribution — student_enrollment has no `sex` column yet, so
+   these stay 0 until one is added (same result as before, without loading
+   every student to find that out). */
+$maleCount   = 0;
+$femaleCount = 0;
 $genderTotal = max($maleCount + $femaleCount, 1);
 $malePct     = round($maleCount / $genderTotal * 100);
 $femalePct   = round($femaleCount / $genderTotal * 100);
@@ -106,8 +133,13 @@ $statusPending  = $pendingCount;
 $trendLabels = [];
 $trendData   = [];
 $running     = 0;
-foreach ($students->sortBy('created_at')->groupBy(fn($s) => $s->created_at->format('Y-m')) as $ym => $grp) {
-    $running    += $grp->count();
+$monthlyNew = (clone $studentsBase)
+    ->selectRaw("DATE_FORMAT(created_at, '%Y-%m') as ym, COUNT(*) as total")
+    ->groupBy('ym')
+    ->orderBy('ym')
+    ->pluck('total', 'ym');
+foreach ($monthlyNew as $ym => $count) {
+    $running    += $count;
     $trendLabels[] = \Carbon\Carbon::createFromFormat('Y-m', $ym)->format('M Y');
     $trendData[]    = $running;
 }
@@ -119,7 +151,7 @@ if (empty($trendLabels)) {
 /* ── Profile modal data ── */
 $profileEnrollment = null;
 if ($modal === 'profile' && $appId) {
-    $profileEnrollment = StudentEnrollment::with(['user', 'requirements', 'tuitionPlan.payments'])->find($appId);
+    $profileEnrollment = StudentEnrollment::with(['user', 'requirements', 'tuitionPlan.payments.proofs.verifier'])->find($appId);
 }
 ?>
 
@@ -660,10 +692,14 @@ body { margin:0; background:#f1f5f9; }
             </div>
           </div>
 
-          <div class="position-relative mb-3">
+          <form method="GET" class="position-relative mb-3" role="search">
+            <input type="hidden" name="tab" value="applications">
             <i class="bi bi-search position-absolute top-50 start-0 translate-middle-y ms-3 text-muted"></i>
-            <input type="text" class="form-control ps-5" placeholder="Search applications..." oninput="filterTable('appTable',this.value)">
-          </div>
+            <input type="search" name="app_q" value="{{ $appSearch }}" class="form-control ps-5" placeholder="Search by name or LRN, then press Enter" aria-label="Search applications">
+          </form>
+          @if($appSearch !== '')
+          <div class="mb-2" style="font-size:12.5px">Showing results for "<strong>{{ $appSearch }}</strong>" &middot; <a href="?tab=applications">Clear search</a></div>
+          @endif
 
           <div class="table-responsive">
             <table class="table table-hover align-middle" id="appTable">
@@ -683,7 +719,7 @@ body { margin:0; background:#f1f5f9; }
                 @endphp
                 <tr>
                   <td><input type="checkbox" class="form-check-input app-row-check" value="{{ $app->id }}" onchange="updateBulkApproveButton()"></td>
-                  <td>{{ $i + 1 }}</td>
+                  <td>{{ $applications->firstItem() + $loop->index }}</td>
                   <td><span class="stu-avatar av-blue">{{ $appInitials }}</span> {{ $appFullName }}</td>
                   <td>{{ $app->grade_level }}</td>
                   <td>
@@ -713,14 +749,23 @@ body { margin:0; background:#f1f5f9; }
                 <tr>
                   <td colspan="8" class="text-center text-muted py-4">
                     <i class="bi bi-inbox" style="font-size:32px"></i>
-                    <div class="mt-2">No pending applications</div>
+                    <div class="mt-2">{{ $appSearch !== '' ? 'No applications match your search' : 'No pending applications' }}</div>
                   </td>
                 </tr>
                 @endforelse
               </tbody>
             </table>
           </div>
-          <div class="mt-3 text-muted" style="font-size:13px">Total: {{ $applications->count() }} pending application(s)</div>
+          <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mt-3">
+            <div class="text-muted" style="font-size:13px">
+              @if($applications->total() > 0)
+                Showing {{ $applications->firstItem() }}–{{ $applications->lastItem() }} of {{ $applications->total() }} pending application(s)
+              @else
+                Total: 0 pending application(s)
+              @endif
+            </div>
+            {{ $applications->onEachSide(1)->links('pagination::bootstrap-5') }}
+          </div>
         </div>
       </div>
 
@@ -745,10 +790,14 @@ body { margin:0; background:#f1f5f9; }
             </div>
           </div>
 
-          <div class="position-relative mb-3">
+          <form method="GET" class="position-relative mb-3" role="search">
+            <input type="hidden" name="tab" value="students">
             <i class="bi bi-search position-absolute top-50 start-0 translate-middle-y ms-3 text-muted"></i>
-            <input type="text" class="form-control ps-5" placeholder="Search students..." oninput="filterTable('stuTable',this.value)">
-          </div>
+            <input type="search" name="stu_q" value="{{ $stuSearch }}" class="form-control ps-5" placeholder="Search by name or LRN, then press Enter" aria-label="Search students">
+          </form>
+          @if($stuSearch !== '')
+          <div class="mb-2" style="font-size:12.5px">Showing results for "<strong>{{ $stuSearch }}</strong>" &middot; <a href="?tab=students">Clear search</a></div>
+          @endif
 
           <div class="table-responsive">
             <table class="table table-hover align-middle" id="stuTable">
@@ -765,7 +814,7 @@ body { margin:0; background:#f1f5f9; }
                   $stuFullName = $stu->last_name . ', ' . $stu->first_name . ($stu->middle_name && $stu->middle_name !== 'N/A' ? ' ' . substr($stu->middle_name,0,1).'.' : '');
                   $stuInitials = strtoupper(substr($stu->first_name,0,1) . substr($stu->last_name,0,1));
                   $avatarColors = ['av-blue','av-teal','av-orange','av-green','av-purple'];
-                  $avatarColor  = $avatarColors[$i % count($avatarColors)];
+                  $avatarColor  = $avatarColors[$loop->index % count($avatarColors)];
                 @endphp
                 @php
                   $payments = $stu->tuitionPlan?->payments ?? collect();
@@ -786,7 +835,7 @@ body { margin:0; background:#f1f5f9; }
                   $hasAnyPendingProof = $payments->contains(fn ($pay) => $pay->hasPendingProof());
                 @endphp
                 <tr>
-                  <td>{{ $i + 1 }}</td>
+                  <td>{{ $students->firstItem() + $loop->index }}</td>
                   <td>
                     <span class="stu-avatar {{ $avatarColor }}">{{ $stuInitials }}</span> {{ $stuFullName }}
                     @if($hasAnyPendingProof)
@@ -838,14 +887,23 @@ body { margin:0; background:#f1f5f9; }
                 <tr>
                   <td colspan="7" class="text-center text-muted py-4">
                     <i class="bi bi-people" style="font-size:32px"></i>
-                    <div class="mt-2">No approved or enrolled students yet</div>
+                    <div class="mt-2">{{ $stuSearch !== '' ? 'No students match your search' : 'No approved or enrolled students yet' }}</div>
                   </td>
                 </tr>
                 @endforelse
               </tbody>
             </table>
           </div>
-          <div class="mt-3 text-muted" style="font-size:13px">Total: {{ $students->count() }} student(s)</div>
+          <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mt-3">
+            <div class="text-muted" style="font-size:13px">
+              @if($students->total() > 0)
+                Showing {{ $students->firstItem() }}–{{ $students->lastItem() }} of {{ $students->total() }} student(s)
+              @else
+                Total: 0 student(s)
+              @endif
+            </div>
+            {{ $students->onEachSide(1)->links('pagination::bootstrap-5') }}
+          </div>
         </div>
       </div>
 
@@ -1877,7 +1935,16 @@ function apiFetch(url, method = 'GET', body = null, isFormData = false) {
 
 /* ── Notification bell ── */
 function renderNotifIcon(type) {
-  return type === 'payment_proof_submitted' ? 'bi-cash-coin' : 'bi-bell';
+  return {
+    payment_proof_submitted: 'bi-cash-coin',
+    online_payment_received: 'bi-lightning-charge-fill',
+    enrollment_submitted:    'bi-person-plus-fill',
+  }[type] || 'bi-bell';
+}
+
+// Notification text includes parent-typed names — never insert it as HTML.
+function escapeHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
 // Cache of the last-loaded notifications, keyed by id, so a click can pull
@@ -1910,8 +1977,8 @@ function loadNotifications() {
              onclick="openNotification('${n.id}')">
           <i class="bi ${renderNotifIcon(n.data.type)}" style="color:#0d9488;font-size:14px;margin-top:2px"></i>
           <div style="min-width:0;flex:1">
-            <div style="font-size:12.5px;color:#1e293b;line-height:1.4">${n.data.message ?? ''}</div>
-            <div style="font-size:11px;color:#94a3b8;margin-top:2px">${n.created_at}</div>
+            <div style="font-size:12.5px;color:#1e293b;line-height:1.4">${escapeHtml(n.data.message)}</div>
+            <div style="font-size:11px;color:#94a3b8;margin-top:2px">${escapeHtml(n.created_at)}</div>
           </div>
           ${n.read ? '' : '<span style="width:7px;height:7px;border-radius:50%;background:#dc2626;flex-shrink:0;margin-top:5px"></span>'}
         </div>
@@ -1992,7 +2059,7 @@ function showImagePreview(url, title) {
   });
 })();
 
-const NOTIF_METHOD_LABELS = { gcash: 'GCash', maya: 'Maya', bank_transfer: 'Bank Transfer', cash: 'Cash' };
+const NOTIF_METHOD_LABELS = { gcash: 'GCash', maya: 'Maya', bank_transfer: 'Bank Transfer', cash: 'Cash', card: 'Card', online_banking: 'Online Banking' };
 
 function openNotification(id) {
   const n = _notifCache[id];
@@ -2005,8 +2072,10 @@ function openNotification(id) {
   if (n.data.type === 'payment_proof_submitted') {
     showPaymentNotifModal(n.data);
   } else if (n.data.enrollment_id) {
-    // Fallback for any future notification type that isn't a payment proof.
-    window.location = `?modal=profile&app_id=${n.data.enrollment_id}&from=students`;
+    // New enrollments and online payments open the student's full profile
+    // (online payments are already verified — nothing to approve there).
+    const from = n.data.from === 'applications' ? 'applications' : 'students';
+    window.location = `?modal=profile&app_id=${encodeURIComponent(n.data.enrollment_id)}&from=${from}`;
   }
 }
 

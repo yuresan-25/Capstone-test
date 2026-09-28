@@ -350,6 +350,7 @@ class EnrollmentController extends Controller
             \App\Models\TuitionPlan::generateForEnrollment($locked);
 
             SafeNotify::to($locked->user, new EnrollmentSubmitted($locked));
+            \App\Support\AdminNotifier::send(new \App\Notifications\NewEnrollmentSubmitted($locked), $locked->grade_level);
 
             // Chose "pay online" in Step 1 — the frontend sends the parent
             // straight to PayMongo for the enrollment fee from here.

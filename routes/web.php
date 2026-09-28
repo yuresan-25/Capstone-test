@@ -42,7 +42,15 @@ Route::post('/reset-password',        [Authcontroller::class, 'resetPassword'])-
 
 // PayMongo server-to-server notifications — no session or CSRF token; only
 // trusted after PayMongo::verifySignature() (CSRF exemption in bootstrap/app.php).
-Route::post('/webhooks/paymongo', [PaymongoController::class, 'webhook'])->name('webhooks.paymongo');
+Route::post('/webhooks/paymongo', [PaymongoController::class, 'webhook'])->name('webhooks.paymongo')->middleware('throttle:120,1');
+
+// Where PayMongo sends the parent back. Deliberately NOT behind parent auth:
+// the checkout can take longer than the login session lasts, and the check
+// here doesn't depend on who is logged in. The signed URL (made when the
+// checkout was created) stops anyone guessing or editing the address.
+Route::get('/tuition/paymongo/return/{checkout}', [PaymongoController::class, 'return'])
+    ->name('tuition.paymongo.return')
+    ->middleware(['signed', 'throttle:30,1']);
 
 // ── PARENT ROUTES — protected by parent guard ──────────────────────────────────
 Route::middleware(['auth:parent'])->group(function () {
@@ -69,7 +77,6 @@ Route::middleware(['auth:parent'])->group(function () {
 
     // Online payment (PayMongo): start a checkout, and where PayMongo sends the parent back.
     Route::post('/tuition/payments/{payment}/paymongo-checkout', [PaymongoController::class, 'checkout'])->name('tuition.paymongo.checkout')->middleware('throttle:10,1');
-    Route::get('/tuition/paymongo/return/{checkout}', [PaymongoController::class, 'return'])->name('tuition.paymongo.return');
 
  Route::post('/profile/upload-pic',      [Authcontroller::class, 'uploadProfilePic'])->name('parent.profile.uploadPic');
 Route::post('/profile/remove-pic',      [Authcontroller::class, 'removeProfilePic'])->name('parent.profile.removePic');

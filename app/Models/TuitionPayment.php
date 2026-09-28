@@ -58,20 +58,28 @@ class TuitionPayment extends Model
      */
     public function verifiedAmount(): float
     {
-        return (float) $this->proofs()
-            ->where('status', 'verified')
-            ->get()
-            ->sum(fn (TuitionPaymentProof $proof) => $proof->creditedAmount());
+        // Uses already-loaded proofs when the caller eager-loaded them
+        // (with('payments.proofs')) — lists of hundreds of installments
+        // otherwise run one query per installment, per call.
+        $verified = $this->relationLoaded('proofs')
+            ? $this->proofs->where('status', 'verified')
+            : $this->proofs()->where('status', 'verified')->get();
+
+        // Rounded to the centavo — summing floats can otherwise leave
+        // ₱1,949.9999999 and an installment that never reads as paid.
+        return round((float) $verified->sum(fn (TuitionPaymentProof $proof) => $proof->creditedAmount()), 2);
     }
 
     public function remainingBalance(): float
     {
-        return max(0, (float) $this->amount_due - $this->verifiedAmount());
+        return max(0, round((float) $this->amount_due - $this->verifiedAmount(), 2));
     }
 
     public function hasPendingProof(): bool
     {
-        return $this->proofs()->where('status', 'pending')->exists();
+        return $this->relationLoaded('proofs')
+            ? $this->proofs->contains('status', 'pending')
+            : $this->proofs()->where('status', 'pending')->exists();
     }
 
     /**
@@ -82,9 +90,12 @@ class TuitionPayment extends Model
      */
     public function refreshStatus(): void
     {
+        // Always recompute from the database — a proof was just added or
+        // changed, so any eager-loaded copy may be stale.
+        $this->unsetRelation('proofs');
         $verified = $this->verifiedAmount();
 
-        if ($verified >= (float) $this->amount_due) {
+        if ($verified >= round((float) $this->amount_due, 2)) {
             $lastVerified = $this->proofs()->where('status', 'verified')->latest('verified_at')->first();
 
             $this->update([

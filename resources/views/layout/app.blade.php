@@ -751,7 +751,9 @@ span.flatpickr-weekday { color: var(--navy); font-weight: 600; }
   </div>
 </footer>
 @endunless
-<div id="toastContainer" class="position-fixed bottom-0 end-0 p-3" style="z-index:9999"></div>
+{{-- Parent portal toasts (parent/scripts/toast.blade.php). Top-right under
+     the sticky topbar — bottom-right covered the fixed "Enroll Now" button. --}}
+<div id="toastContainer" style="position:fixed;top:80px;right:16px;z-index:9999;display:flex;flex-direction:column;gap:8px;max-width:calc(100vw - 32px)"></div>
 <script src="{{ asset('vendor/bootstrap/bootstrap.bundle.min.js') }}"></script>
 <script>
 /* ═══════════════════════════════════════════════════════════════
