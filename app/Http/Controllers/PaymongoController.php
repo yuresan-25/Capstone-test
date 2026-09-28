@@ -26,7 +26,14 @@ class PaymongoController extends Controller
             abort(403, 'You do not have permission to pay for this installment.');
         }
 
-        if (! in_array($enrollment->status, ['approved', 'enrolled'], true)) {
+        // The enrollment fee (installment 0) is paid right after "Enroll Now",
+        // while the application is still pending; installments unlock once
+        // the enrollment is approved.
+        $allowed = $payment->installment_number === 0
+            ? ['pending', 'approved', 'enrolled']
+            : ['approved', 'enrolled'];
+
+        if (! in_array($enrollment->status, $allowed, true)) {
             return response()->json(['message' => 'Online payment unlocks once this enrollment is approved.'], 403);
         }
 
@@ -52,7 +59,7 @@ class PaymongoController extends Controller
         ]);
 
         $amount = round((float) $request->input('amount'), 2);
-        $label = $payment->installment_number === 0 ? 'Down Payment' : 'Installment ' . $payment->installment_number;
+        $label = $payment->installment_number === 0 ? 'Enrollment Fee' : 'Installment ' . $payment->installment_number;
         $childName = trim($enrollment->first_name . ' ' . $enrollment->last_name);
 
         $checkout = PaymongoCheckout::create([
@@ -112,7 +119,13 @@ class PaymongoController extends Controller
             abort(403);
         }
 
-        $to = fn (string $result) => redirect()->route('parent.dashboard', ['panel' => 'tuition-payments', 'payment' => $result]);
+        // The enrollment fee is paid before approval, when Tuition & Payments
+        // is still locked — send those parents back to Home instead.
+        $panel = $checkout->payment->installment_number === 0 && $checkout->payment->plan->enrollment->status === 'pending'
+            ? 'home'
+            : 'tuition-payments';
+
+        $to = fn (string $result) => redirect()->route('parent.dashboard', ['panel' => $panel, 'payment' => $result]);
 
         if ($request->boolean('cancelled')) {
             return $to('cancelled');

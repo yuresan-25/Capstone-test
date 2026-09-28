@@ -465,11 +465,26 @@ function startOnlinePayment(amount, errorEl) {
   });
 }
 
-// Back from PayMongo: /parent?panel=tuition-payments&payment=success|processing|cancelled
+// Back from PayMongo: /parent?panel=tuition-payments|home&payment=success|processing|cancelled
+// (home = the enrollment fee, paid before approval unlocks Tuition & Payments).
 function handlePaymentReturn() {
   var params = new URLSearchParams(window.location.search);
   var result = params.get('payment');
-  if (params.get('panel') !== 'tuition-payments' || !result) return;
+  var panel = params.get('panel');
+  if (!result || (panel !== 'tuition-payments' && panel !== 'home')) return;
+
+  if (panel === 'home') {
+    showPanel('home');
+    if (result === 'success') {
+      showToast('success', 'Enrollment fee paid! Your application is now waiting for the school\'s review.');
+    } else if (result === 'cancelled') {
+      showToast('info', 'Payment cancelled. Nothing was charged — you can pay the enrollment fee anytime from your child\'s card.');
+    } else {
+      showToast('warning', 'Your payment is being confirmed. Refresh in a moment to see it.');
+    }
+    window.history.replaceState({}, '', window.location.pathname);
+    return;
+  }
 
   showPanel('tuition-payments');
 

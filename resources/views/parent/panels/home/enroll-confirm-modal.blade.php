@@ -24,7 +24,7 @@
         <button type="button" class="btn btn-outline-secondary fw-semibold" data-bs-dismiss="modal">
           <i class="bi bi-arrow-left me-1"></i>Go Back
         </button>
-        <button type="button" class="btn fw-semibold" style="background:#16a34a;color:#fff" onclick="confirmFinalizeEnrollment()">
+        <button type="button" class="btn fw-semibold" id="enrollConfirmBtn" style="background:#16a34a;color:#fff" onclick="confirmFinalizeEnrollment()">
           <i class="bi bi-check-circle-fill me-1"></i>Confirm & Enroll
         </button>
       </div>

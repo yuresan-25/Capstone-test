@@ -24,6 +24,7 @@ class EnrollmentController extends Controller
         'Maya'          => 'maya',
         'Bank Transfer' => 'bank_transfer',
         'Cash'          => 'cash',
+        'Online'        => 'online', // pay via PayMongo right after "Enroll Now"
     ];
 
     /**
@@ -68,9 +69,12 @@ class EnrollmentController extends Controller
             'emergency_contact'  => 'required|string|max:20',
             'emergency_contact_2' => 'nullable|string|max:20',
             'classSession'       => 'required|in:AM,PM',
-            'payMethod'          => 'required|in:GCash,Maya,Bank Transfer,Cash',
+            'payMethod'          => 'required|in:GCash,Maya,Bank Transfer,Cash,Online',
             'paymentPlan'        => 'required|in:monthly,quarterly',
-            'proof_of_payment'   => 'required|file|mimes:jpg,jpeg,png,pdf|max:5120',
+            // Paying online means there's no receipt to upload. store()
+            // additionally requires it for every other method; update()
+            // keeps the saved one when no new file is sent.
+            'proof_of_payment'   => 'nullable|file|mimes:jpg,jpeg,png,pdf|max:5120',
         ];
     }
 
@@ -89,6 +93,7 @@ class EnrollmentController extends Controller
         'maya'          => 'Maya',
         'bank_transfer' => 'Bank Transfer',
         'cash'          => 'Cash',
+        'online'        => 'Online',
     ];
 
     /**
@@ -129,6 +134,8 @@ class EnrollmentController extends Controller
                 'classSession'      => $enrollment->preferred_session,
                 'payMethod'         => self::PAY_METHOD_REVERSE_MAP[$enrollment->payment_method] ?? '',
                 'paymentPlan'       => $enrollment->payment_plan,
+                'hasProof'          => (bool) $enrollment->proof_of_payment,
+                'enrollmentFee'     => (float) (\App\Models\EnrollmentPeriod::current()?->enrollment_fee ?? 0),
                 'status'            => $enrollment->status,
             ],
         ]);
@@ -140,7 +147,14 @@ class EnrollmentController extends Controller
      */
     public function store(Request $request)
     {
-        $validated = $request->validate($this->rules(), $this->messages());
+        $validated = $request->validate(
+            ['proof_of_payment' => 'required_unless:payMethod,Online|nullable|file|mimes:jpg,jpeg,png,pdf|max:5120'] + $this->rules(),
+            ['proof_of_payment.required_unless' => 'Please upload your proof of payment, or choose to pay online.'] + $this->messages()
+        );
+
+        if ($response = $this->rejectOnlineIfUnavailable($validated)) {
+            return $response;
+        }
 
         $period = \App\Models\EnrollmentPeriod::current();
         if (! $period || ! $period->is_open) {
@@ -158,11 +172,9 @@ class EnrollmentController extends Controller
 
         $parent = Auth::guard('parent')->user();
 
-        $path = ImageUploadStorer::store(
-            $request->file('proof_of_payment'),
-            'proof_of_payment/' . $parent->id,
-            'public'
-        );
+        $path = $request->hasFile('proof_of_payment')
+            ? ImageUploadStorer::store($request->file('proof_of_payment'), 'proof_of_payment/' . $parent->id, 'public')
+            : null;
 
         $enrollment = StudentEnrollment::create([
             'user_id'            => $parent->id,
@@ -213,12 +225,20 @@ class EnrollmentController extends Controller
             abort(403, 'You do not have permission to edit this enrollment.');
         }
 
-        $rules = $this->rules();
-        // proof_of_payment is already required via $this->rules() — the parent
-        // must reselect a file every time they edit, since browsers can't
-        // pre-fill file inputs for security reasons.
+        $validated = $request->validate($this->rules(), $this->messages());
 
-        $validated = $request->validate($rules, $this->messages());
+        if ($response = $this->rejectOnlineIfUnavailable($validated)) {
+            return $response;
+        }
+
+        // Switching from "pay online" to "I already paid" needs a receipt —
+        // there's no saved one to fall back on.
+        if ($validated['payMethod'] !== 'Online' && ! $request->hasFile('proof_of_payment') && ! $enrollment->proof_of_payment) {
+            return response()->json([
+                'message' => 'Please upload your proof of payment, or choose to pay online.',
+                'errors'  => ['proof_of_payment' => ['Please upload your proof of payment, or choose to pay online.']],
+            ], 422);
+        }
 
         $data = [
             'first_name'         => $validated['first_name'],
@@ -241,15 +261,18 @@ class EnrollmentController extends Controller
             'payment_plan'       => $validated['paymentPlan'],
         ];
 
-        // Always replace the proof-of-payment file, since it's required on
-        // every edit (old file becomes orphaned — acceptable tradeoff for
-        // keeping the data model simple; not deleted here to avoid risk of
-        // removing a file the admin may still be reviewing mid-edit).
-        $data['proof_of_payment'] = ImageUploadStorer::store(
-            $request->file('proof_of_payment'),
-            'proof_of_payment/' . $parent->id,
-            'public'
-        );
+        // A new receipt replaces the old one (the old file is left on disk
+        // rather than deleted mid-edit); no file keeps the saved one; paying
+        // online clears it, since PayMongo's confirmation becomes the proof.
+        if ($validated['payMethod'] === 'Online') {
+            $data['proof_of_payment'] = null;
+        } elseif ($request->hasFile('proof_of_payment')) {
+            $data['proof_of_payment'] = ImageUploadStorer::store(
+                $request->file('proof_of_payment'),
+                'proof_of_payment/' . $parent->id,
+                'public'
+            );
+        }
 
         $enrollment->update($data);
 
@@ -328,12 +351,22 @@ class EnrollmentController extends Controller
 
             SafeNotify::to($locked->user, new EnrollmentSubmitted($locked));
 
+            // Chose "pay online" in Step 1 — the frontend sends the parent
+            // straight to PayMongo for the enrollment fee from here.
+            $downPayment = $locked->payment_method === 'online'
+                ? $locked->tuitionPlan()->first()?->payments()->where('installment_number', 0)->first()
+                : null;
+
             return response()->json([
                 'message'    => 'Enrollment complete! Your child has been added to your Home tab and is awaiting admin review.',
                 'enrollment' => [
                     'id'     => $locked->id,
                     'status' => $locked->status,
                 ],
+                'pay_online' => $downPayment ? [
+                    'payment_id' => $downPayment->id,
+                    'amount'     => (float) $downPayment->amount_due,
+                ] : null,
             ]);
         });
     }
@@ -567,6 +600,12 @@ class EnrollmentController extends Controller
             ], 422);
         }
 
+        if (self::awaitingOnlineFee($enrollment)) {
+            return response()->json([
+                'message' => "The parent chose to pay the enrollment fee online and hasn't paid it yet.",
+            ], 422);
+        }
+
         $enrollment->update(['status' => 'approved']);
         $this->settleDownPayment($enrollment, $request->user());
 
@@ -592,6 +631,33 @@ class EnrollmentController extends Controller
             'success' => true,
             'message' => trim($enrollment->first_name . ' ' . $enrollment->last_name) . ' has been approved.',
         ]);
+    }
+
+    /**
+     * True while a parent who chose "pay online" still owes the enrollment
+     * fee — approval waits for it, since there's no receipt to review.
+     */
+    public static function awaitingOnlineFee(StudentEnrollment $enrollment): bool
+    {
+        if ($enrollment->payment_method !== 'online') {
+            return false;
+        }
+
+        $downPayment = $enrollment->tuitionPlan?->payments()->where('installment_number', 0)->first();
+
+        return $downPayment && $downPayment->remainingBalance() > 0;
+    }
+
+    /** "Pay online" is only offered when PayMongo keys are configured. */
+    private function rejectOnlineIfUnavailable(array $validated)
+    {
+        if ($validated['payMethod'] === 'Online' && ! \App\Support\PayMongo::enabled()) {
+            return response()->json([
+                'message' => 'Online payment is not available right now. Please upload your proof of payment instead.',
+            ], 422);
+        }
+
+        return null;
     }
 
     /**
@@ -650,6 +716,11 @@ class EnrollmentController extends Controller
 
                 if ($enrollment->status !== 'pending') {
                     $skipped[] = "{$name} (already reviewed)";
+                    continue;
+                }
+
+                if (self::awaitingOnlineFee($enrollment)) {
+                    $skipped[] = "{$name} (enrollment fee not paid online yet)";
                     continue;
                 }
 

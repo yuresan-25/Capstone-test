@@ -1347,7 +1347,7 @@ body { margin:0; background:#f1f5f9; }
                 </div>
                 <div class="col-6 col-md-3">
                   <div class="detail-label">Payment Method</div>
-                  <div class="detail-value">{{ ucfirst(str_replace('_',' ',$p->payment_method)) }}</div>
+                  <div class="detail-value">{{ $p->payment_method === 'online' ? 'Online (PayMongo)' : ucfirst(str_replace('_',' ',$p->payment_method)) }}</div>
                 </div>
                 <div class="col-6 col-md-3">
                   <div class="detail-label">Last School Attended</div>
@@ -1538,14 +1538,15 @@ body { margin:0; background:#f1f5f9; }
           </div>
           @endif
 
-          {{-- Proof of Payment — the Step 1 enrollment-fee receipt. It's
-               also the down payment's (installment 0) first proof row, so
-               Verify / Resubmit act on that proof through the same tuition
-               proof endpoints as every other installment. --}}
-          @if($p->proof_of_payment)
+          {{-- Proof of Payment — the enrollment fee (installment 0). Either the
+               Step 1 receipt (its first proof row, so Verify / Resubmit act on
+               it through the tuition proof endpoints), or — when the parent
+               chose "pay online" — PayMongo's confirmation. --}}
+          @if($p->proof_of_payment || $p->payment_method === 'online')
           @php
             $pDownPayment = $p->tuitionPlan?->payments->firstWhere('installment_number', 0);
             $pDownProof   = $pDownPayment?->proofs->sortByDesc('submitted_at')->first();
+            $pPaidOnline  = $pDownProof?->isOnline() && $pDownProof->status === 'verified';
           @endphp
           <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden">
             <div style="padding:12px 16px;background:#f1f5f9;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;gap:8px">
@@ -1556,7 +1557,12 @@ body { margin:0; background:#f1f5f9; }
               <div style="min-width:0;flex:1">
                 <div style="font-size:13px;font-weight:600;color:#1e293b">Enrollment Fee (Down Payment)@if($pDownPayment) — ₱{{ number_format($pDownPayment->amount_due, 2) }}@endif</div>
                 <div class="mt-1">
-                  @if($pDownProof?->status === 'verified')
+                  @if($pPaidOnline)
+                    <span class="badge-approved">Verified</span>
+                    <span class="badge rounded-pill px-2 ms-1" style="background:#e8ecf7;color:#1a2a5e;font-size:11px"><i class="bi bi-lightning-charge-fill me-1"></i>Paid online via PayMongo</span>
+                  @elseif($p->payment_method === 'online' && ! $p->proof_of_payment)
+                    <span class="badge-pending">Awaiting online payment</span>
+                  @elseif($pDownProof?->status === 'verified')
                     <span class="badge-approved">Verified</span>
                   @elseif($pDownProof?->status === 'rejected')
                     <span class="badge-resubmit">Needs Resubmit</span>
@@ -1564,6 +1570,11 @@ body { margin:0; background:#f1f5f9; }
                     <span class="badge-pending">Pending Review</span>
                   @endif
                 </div>
+                @if($pPaidOnline)
+                <div class="text-muted mt-1" style="font-size:11.5px">Paid {{ $pDownProof->submitted_at->format('M j, Y g:i A') }} &bull; PayMongo ref {{ $pDownProof->paymongo_payment_id }}</div>
+                @elseif($p->payment_method === 'online' && ! $p->proof_of_payment)
+                <div class="text-muted mt-1" style="font-size:11.5px">The parent chose to pay online. It's confirmed automatically once they pay.</div>
+                @endif
                 @if($pDownProof?->status === 'rejected' && $pDownProof->feedback)
                 <div class="mt-2" style="font-size:12px;color:#991b1b;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:8px 10px">
                   <i class="bi bi-exclamation-circle-fill me-1"></i>{{ $pDownProof->feedback }}
@@ -1571,8 +1582,13 @@ body { margin:0; background:#f1f5f9; }
                 @endif
               </div>
               <div class="d-flex align-items-center gap-2 flex-shrink-0">
+                @if($p->proof_of_payment)
                 <button type="button" class="btn btn-outline-secondary btn-sm" style="font-size:12px" onclick="showImagePreview('{{ asset('storage/' . $p->proof_of_payment) }}', 'Proof of Payment')"><i class="bi bi-eye me-1"></i>View</button>
-                @if($pDownProof?->status === 'pending')
+                @endif
+                @if($pDownProof?->status === 'verified')
+                <a class="btn btn-outline-secondary btn-sm" style="font-size:12px" href="{{ route('admin.tuition.receipt', $pDownProof) }}" target="_blank" rel="noopener"><i class="bi bi-receipt me-1"></i>Receipt</a>
+                @endif
+                @if($pDownProof?->status === 'pending' && ! $pDownProof->isOnline())
                 <button type="button" class="btn btn-success btn-sm" style="font-size:12px" onclick="openVerifyProofModal({{ $pDownProof->id }}, 'Enrollment Fee (Down Payment)', {{ $pDownProof->amount }})">
                   <i class="bi bi-check-lg me-1"></i>Verify
                 </button>
@@ -1590,7 +1606,12 @@ body { margin:0; background:#f1f5f9; }
 
       <div class="modal-footer border-0" style="background:#f8fafc;padding:14px 24px">
         @if($p->status === 'pending')
-        @if($pAllRequiredApproved)
+        @if(\App\Http\Controllers\EnrollmentController::awaitingOnlineFee($p))
+        <button type="button" class="btn btn-success btn-sm fw-semibold px-3" disabled title="The enrollment fee hasn't been paid online yet.">
+          <i class="bi bi-check-circle me-1"></i>Approve
+        </button>
+        <span class="text-muted align-self-center" style="font-size:11.5px">Waiting for the enrollment fee to be paid online</span>
+        @elseif($pAllRequiredApproved)
         <button type="button" class="btn btn-success btn-sm fw-semibold px-3" onclick="approveApplication({{ $p->id }}, '{{ addslashes($p->first_name . ' ' . $p->last_name) }}')">
           <i class="bi bi-check-circle me-1"></i>Approve
         </button>
@@ -2191,7 +2212,11 @@ function approveApplication(enrollmentId, name) {
       phlciToast(data.message || `${name} has been approved.`, 'success');
       setTimeout(() => location.reload(), 700);
     })
-    .catch(() => phlciToast('Could not approve this application. Please try again.', 'error'));
+    .catch(err => {
+      let message = 'Could not approve this application. Please try again.';
+      try { message = JSON.parse(err.message).message || message; } catch (e) {}
+      phlciToast(message, 'error');
+    });
 }
 
 /* ── Bulk approve (Applications tab) ─────────────────────────────────────── */

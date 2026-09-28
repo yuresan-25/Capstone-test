@@ -71,7 +71,9 @@ class TuitionPlan extends Model
                 'installment_number' => 0,
                 'amount_due'         => $downPayment,
                 'due_date'           => now(),
-                'status'             => 'pending',
+                // No Step 1 receipt = the parent chose to pay online right
+                // after this, so there's nothing to review yet.
+                'status'             => $enrollment->proof_of_payment ? 'pending' : 'unpaid',
                 'proof_of_payment'   => $enrollment->proof_of_payment,
                 'payment_method'     => $enrollment->payment_method,
                 'submitted_at'       => now(),

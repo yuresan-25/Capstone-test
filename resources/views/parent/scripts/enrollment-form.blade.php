@@ -9,6 +9,14 @@ var PHLCIStudentType = 'old';
 // (enrollment-requirements-script.blade.php) read this same variable.
 var currentDraftId = null;
 
+// Enrollment fee: 'online' (pay via PayMongo right after Enroll Now) or
+// 'manual' (upload a receipt now). Online is only offered when PayMongo is set up.
+var FEE_PAY_ONLINE_ENABLED = @json(\App\Support\PayMongo::enabled());
+var feeMode = FEE_PAY_ONLINE_ENABLED ? 'online' : 'manual';
+// Whether the saved draft already has a receipt on file (so re-saving
+// without choosing a new file keeps it).
+var currentDraftHasProof = false;
+
 // Branded calendar picker for Date of Birth (replaces the browser's native
 // <input type="date">, which renders inconsistently — plain system UI in
 // Chrome, a different widget in Firefox/Safari — with one consistent look.
@@ -54,8 +62,7 @@ function collectAutosaveData() {
   });
   var session = document.querySelector('input[name="classSession"]:checked');
   if (session) data.session = session.value;
-  var method = document.querySelector('input[name="payMethod"]:checked');
-  if (method) data.payMethod = method.value;
+  data.payMethod = currentPayMethod();
   var plan = document.querySelector('input[name="paymentPlan"]:checked');
   if (plan) data.paymentPlan = plan.value;
   return data;
@@ -101,12 +108,7 @@ function restoreAutosavedDraft() {
   if (data.session) {
     document.querySelectorAll('input[name="classSession"]').forEach(function (r) { r.checked = (r.value === data.session); });
   }
-  if (data.payMethod) {
-    document.querySelectorAll('.pay-method-card').forEach(function (card) {
-      var radio = card.querySelector('input[name="payMethod"]');
-      if (radio && radio.value === data.payMethod) selectPayMethod(card, data.payMethod);
-    });
-  }
+  if (data.payMethod) applyPayMethod(data.payMethod);
   if (data.paymentPlan) {
     document.querySelectorAll('#paymentPlanCards .pay-method-card').forEach(function (card) {
       var radio = card.querySelector('input[name="paymentPlan"]');
@@ -145,13 +147,47 @@ function switchStudentType(type) {
   }
 }
 
-// ── Payment method ─────────────────────────────────────────────────────────
+// ── Enrollment fee: pay online vs. upload a receipt ────────────────────────
+function selectFeeOption(mode) {
+  if (mode === 'online' && !FEE_PAY_ONLINE_ENABLED) mode = 'manual';
+  feeMode = mode;
+  document.querySelectorAll('#feeOptionCards .fee-option').forEach(function (opt) {
+    var active = opt.dataset.mode === mode;
+    opt.classList.toggle('active', active);
+    opt.querySelector('input').checked = active;
+  });
+  var online = document.getElementById('feeOnlineBlock');
+  var manual = document.getElementById('feeManualBlock');
+  if (online) online.classList.toggle('d-none', mode !== 'online');
+  if (manual) manual.classList.toggle('d-none', mode !== 'manual');
+}
+
+// The payMethod value sent to the server: 'Online', or the chosen chip.
+function currentPayMethod() {
+  if (feeMode === 'online') return 'Online';
+  var method = document.querySelector('#payMethodCards input[name="payMethod"]:checked');
+  return method ? method.value : '';
+}
+
+// Restores a saved payMethod ('Online' or a chip value) into the form.
+function applyPayMethod(value) {
+  if (value === 'Online') { selectFeeOption('online'); return; }
+  selectFeeOption('manual');
+  document.querySelectorAll('#payMethodCards .pay-method-card').forEach(function (card) {
+    var radio = card.querySelector('input[name="payMethod"]');
+    if (radio && radio.value === value) selectPayMethod(card, value);
+  });
+}
+
+// ── Payment method (receipt upload) ────────────────────────────────────────
+// Scoped to #payMethodCards — the plan cards share the .pay-method-card
+// class, and resetting every card here used to clear the plan highlight.
 function selectPayMethod(card, method) {
-  document.querySelectorAll('.pay-method-card').forEach(c => { c.style.background='#fff'; c.style.borderColor='#e2e8f0'; c.style.boxShadow='none'; });
+  document.querySelectorAll('#payMethodCards .pay-method-card').forEach(c => { c.style.background='#fff'; c.style.borderColor='#e2e8f0'; c.style.boxShadow='none'; });
   card.style.background='#dbeafe'; card.style.borderColor='#2563eb'; card.style.boxShadow='inset 0 0 0 1px #2563eb';
+  card.querySelector('input[name="payMethod"]').checked = true;
   var uploadStep = document.getElementById('proofUploadLabel');
-  if (method === 'Cash') { if (uploadStep) uploadStep.textContent = 'Step 2 — Upload Official Receipt or OR Number Photo'; }
-  else { if (uploadStep) uploadStep.textContent = 'Step 2 — Upload Screenshot / Receipt'; }
+  if (uploadStep) uploadStep.textContent = method === 'Cash' ? 'Upload the official receipt (or a photo of the OR number)' : 'Upload your receipt';
 }
 
 function selectPaymentPlan(card, plan) {
@@ -242,12 +278,8 @@ function loadDraftIntoForm(enrollmentId) {
       r.checked = (r.value === e.classSession);
     });
 
-    document.querySelectorAll('.pay-method-card').forEach(card => {
-      var radio = card.querySelector('input[name="payMethod"]');
-      if (radio && radio.value === e.payMethod) {
-        selectPayMethod(card, e.payMethod);
-      }
-    });
+    currentDraftHasProof = !!e.hasProof;
+    applyPayMethod(e.payMethod);
 
     document.querySelectorAll('#paymentPlanCards .pay-method-card').forEach(card => {
       var radio = card.querySelector('input[name="paymentPlan"]');
@@ -262,7 +294,7 @@ function loadDraftIntoForm(enrollmentId) {
     var proofInput = document.querySelector('#proofUploadBlock input[type="file"]');
     if (proofInput) proofInput.value = '';
     var fn = document.getElementById('paymentFileName');
-    if (fn) fn.textContent = 'Re-upload your proof of payment only if you want to change it.';
+    if (fn) fn.textContent = e.hasProof ? 'Your receipt is saved. Upload a new one only if you want to replace it.' : '';
     var preview = document.getElementById('payProofPreview');
     if (preview) preview.style.display = 'none';
 
@@ -321,14 +353,15 @@ function submitPHLCIForm() {
   if (contactEl && contactEl.value.trim() && !/^(09|\+639)\d{9}$/.test(contactEl.value.trim())) {
     contactEl.classList.add('is-invalid'); errors.push('Emergency Contact (must be e.g. 09171234567)'); if (!firstErrorEl) firstErrorEl = contactEl;
   }
-  var method = document.querySelector('input[name="payMethod"]:checked');
-  if (!method) { errors.push('Payment Method'); }
   var plan = document.querySelector('input[name="paymentPlan"]:checked');
   if (!plan) { errors.push('Tuition Payment Plan'); }
+  var payMethod = currentPayMethod();
   var proofInput = document.querySelector('#proofUploadBlock input[type="file"]');
-  // Proof of payment is only required on first save. On a re-save of an
-  // existing draft, leaving it blank just keeps whatever was already saved.
-  if (!currentDraftId && (!proofInput || !proofInput.files.length)) { errors.push('Proof of Payment'); }
+  if (feeMode === 'manual') {
+    if (!payMethod) { errors.push('How you paid the enrollment fee'); }
+    // A receipt is needed unless this draft already has one saved.
+    if (!currentDraftHasProof && (!proofInput || !proofInput.files.length)) { errors.push('Enrollment fee receipt'); }
+  }
 
   if (errors.length > 0) {
     if (firstErrorEl) {
@@ -345,7 +378,6 @@ function submitPHLCIForm() {
   var lastName   = document.getElementById('f_last_name').value.trim();
   var grade      = document.getElementById('f_grade_level').value;
   var sessionVal = session ? session.value : '';
-  var payMethod  = method ? method.value : '';
 
   var formData = new FormData();
   formData.append('first_name', firstName);
@@ -368,7 +400,7 @@ function submitPHLCIForm() {
   formData.append('classSession', sessionVal);
   formData.append('payMethod', payMethod);
   formData.append('paymentPlan', plan ? plan.value : '');
-  if (proofInput && proofInput.files.length) {
+  if (feeMode === 'manual' && proofInput && proofInput.files.length) {
     formData.append('proof_of_payment', proofInput.files[0]);
   }
 
@@ -395,6 +427,7 @@ function submitPHLCIForm() {
   .then(data => {
     var saved = data.enrollment;
     currentDraftId = saved.id;
+    currentDraftHasProof = feeMode === 'manual' && (currentDraftHasProof || !!(proofInput && proofInput.files.length));
     clearAutosavedDraft(); // now safely on the server — local copy no longer needed
 
     // Show the green "Step 1 complete" banner with a short summary, hide the form.
@@ -443,7 +476,10 @@ function resetPHLCIForm() {
    'f_birth_place','f_address','f_last_school','f_mother_name','f_father_name','f_guardian_name','f_emergency_contact']
     .forEach(id => { var el = document.getElementById(id); if (el) { el.value=''; el.classList.remove('is-invalid'); } });
   document.querySelectorAll('input[name="classSession"]').forEach(r => r.checked = false);
-  document.querySelectorAll('.pay-method-card').forEach(c => { c.style.background='#fff'; c.style.borderColor='#e2e8f0'; });
+  currentDraftHasProof = false;
+  document.querySelectorAll('.pay-method-card').forEach(c => { c.style.background='#fff'; c.style.borderColor='#e2e8f0'; c.style.boxShadow='none'; });
+  document.querySelectorAll('input[name="payMethod"], input[name="paymentPlan"]').forEach(r => r.checked = false);
+  selectFeeOption(FEE_PAY_ONLINE_ENABLED ? 'online' : 'manual');
   var proofInput = document.querySelector('#proofUploadBlock input[type="file"]');
   if (proofInput) proofInput.value = '';
   var fn = document.getElementById('paymentFileName');
@@ -686,8 +722,19 @@ function showEnrollConfirmModal() {
           '<div class="d-flex justify-content-between"><span class="text-muted">Student</span><span class="fw-semibold">' + e.name + '</span></div>' +
           '<div class="d-flex justify-content-between"><span class="text-muted">Grade Level</span><span class="fw-semibold">' + e.grade_level + '</span></div>' +
           '<div class="d-flex justify-content-between"><span class="text-muted">Session</span><span class="fw-semibold">' + e.classSession + '</span></div>' +
-          '<div class="d-flex justify-content-between"><span class="text-muted">Payment Method</span><span class="fw-semibold">' + e.payMethod + '</span></div>' +
+          '<div class="d-flex justify-content-between"><span class="text-muted">Enrollment Fee</span><span class="fw-semibold text-end">' +
+            (e.payMethod === 'Online'
+              ? 'Pay online next' + (e.enrollmentFee ? ' — ₱' + Number(e.enrollmentFee).toLocaleString('en-US', {minimumFractionDigits: 2}) : '')
+              : 'Paid via ' + e.payMethod + ' (receipt uploaded)') +
+          '</span></div>' +
           '<div class="d-flex justify-content-between"><span class="text-muted">Documents</span><span class="fw-semibold text-end" style="max-width:60%">' + docList + '</span></div>';
+      }
+
+      var confirmBtn = document.getElementById('enrollConfirmBtn');
+      if (confirmBtn) {
+        confirmBtn.innerHTML = e.payMethod === 'Online'
+          ? '<i class="bi bi-lock-fill me-1"></i>Confirm &amp; Pay Online'
+          : '<i class="bi bi-check-circle-fill me-1"></i>Confirm &amp; Enroll';
       }
 
       var modalEl  = document.getElementById('enrollConfirmModal');
@@ -701,7 +748,7 @@ function showEnrollConfirmModal() {
 function confirmFinalizeEnrollment() {
   if (!activeEnrollmentId) return;
 
-  var confirmBtn = document.querySelector('#enrollConfirmModal .btn-success, #enrollConfirmModal [onclick="confirmFinalizeEnrollment()"]');
+  var confirmBtn = document.getElementById('enrollConfirmBtn');
   if (confirmBtn) { confirmBtn.disabled = true; confirmBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Enrolling…'; }
 
   fetch('/enrollment/' + activeEnrollmentId + '/finalize', {
@@ -710,6 +757,12 @@ function confirmFinalizeEnrollment() {
   })
   .then(res => res.json().then(data => ({ ok: res.ok, data })))
   .then(({ ok, data }) => {
+    if (ok && data.pay_online) {
+      // Chose "pay online" — go straight to PayMongo for the enrollment fee.
+      if (confirmBtn) confirmBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Opening payment…';
+      startEnrollmentFeePayment(data.pay_online.payment_id, data.pay_online.amount);
+      return;
+    }
     if (ok) {
       var modalEl  = document.getElementById('enrollConfirmModal');
       var instance = bootstrap.Modal.getInstance(modalEl);
@@ -727,4 +780,31 @@ function confirmFinalizeEnrollment() {
     if (confirmBtn) { confirmBtn.disabled = false; confirmBtn.innerHTML = '<i class="bi bi-check-circle-fill me-1"></i>Confirm & Enroll'; }
   });
 }
+
+// Opens PayMongo checkout for the full enrollment fee. Used right after
+// "Enroll Now" and by the "Pay enrollment fee" button on a Home card (for a
+// parent who closed the checkout without paying). If it can't open, the
+// application is still saved — reload so the Home card offers a retry.
+function startEnrollmentFeePayment(paymentId, amount, btn) {
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Opening…'; }
+
+  fetch('/tuition/payments/' + paymentId + '/paymongo-checkout', {
+    method: 'POST',
+    headers: { 'X-CSRF-TOKEN': getCsrfToken(), 'Accept': 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ amount: amount }),
+  })
+  .then(res => res.json().then(data => ({ ok: res.ok, data })))
+  .then(({ ok, data }) => {
+    if (ok && data.checkout_url) { window.location.href = data.checkout_url; return; }
+    throw new Error(data.message || '');
+  })
+  .catch(err => {
+    showToast('danger', (err && err.message) || 'Could not open the payment page. You can pay the enrollment fee from your child\'s card on Home.');
+    setTimeout(function () { window.location.reload(); }, 2500);
+  });
+}
+
+document.addEventListener('DOMContentLoaded', function () {
+  selectFeeOption(feeMode);
+});
 </script>

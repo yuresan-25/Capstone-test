@@ -95,6 +95,21 @@
               @if($child->preferred_session)
               <div class="text-muted" style="font-size:11px"><i class="bi bi-sun me-1"></i>{{ $child->preferred_session }} Session</div>
               @endif
+              @php
+                // Chose "pay online" but closed PayMongo before paying.
+                $feePayment = $child->status === 'pending' && \App\Http\Controllers\EnrollmentController::awaitingOnlineFee($child)
+                  ? $child->tuitionPlan->payments()->where('installment_number', 0)->first()
+                  : null;
+              @endphp
+              @if($feePayment)
+              <div class="w-100 mt-1 px-2 py-1 rounded-2" style="font-size:11px;background:#fffbeb;color:#b45309;border:1px solid #fde68a">
+                <i class="bi bi-exclamation-circle-fill me-1"></i>Enrollment fee not paid yet
+              </div>
+              <button class="btn btn-sm fw-semibold w-100" style="font-size:11.5px;background:#1a2a5e;color:#fff"
+                onclick="event.stopPropagation(); startEnrollmentFeePayment({{ $feePayment->id }}, {{ $feePayment->remainingBalance() }}, this)">
+                <i class="bi bi-lightning-charge-fill me-1"></i>Pay ₱{{ number_format($feePayment->remainingBalance(), 2) }} online
+              </button>
+              @endif
               @if($child->status === 'pending')
               <button class="btn btn-sm fw-semibold w-100 mt-2" style="font-size:11.5px;background:#fee2e2;color:#dc2626"
                 onclick="event.stopPropagation(); deleteEnrollment({{ $child->id }}, '{{ addslashes($child->first_name . ' ' . $child->last_name) }}')">
