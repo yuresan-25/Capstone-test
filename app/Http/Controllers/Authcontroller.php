@@ -238,23 +238,13 @@ class Authcontroller extends Controller
                 ->withInput($request->only('email', 'role')); // ← role included
         }
 
+        // Parent tab: parent accounts only. There's deliberately no fallback
+        // to the admin guard here — admin and superadmin accounts must sign
+        // in through the Admin tab. The error stays generic so this form
+        // can't be used to check whether an email belongs to an admin.
         if (Auth::guard('parent')->attempt($credentials)) {
             $request->session()->regenerate();
             $user = Auth::guard('parent')->user();
-
-            return redirect('/parent')
-                ->with('success', 'Welcome back, ' . $user->first_name . '!');
-        }
-
-        if (Auth::guard('web')->attempt($credentials)) {
-            $request->session()->regenerate();
-            $user = Auth::guard('web')->user();
-
-            if (in_array($user->role, ['admin', 'superadmin'])) {
-                $user->update(['last_login_at' => now()]);
-                return redirect('/admin')
-                    ->with('success', 'Welcome back, ' . $user->first_name . '!');
-            }
 
             return redirect('/parent')
                 ->with('success', 'Welcome back, ' . $user->first_name . '!');
