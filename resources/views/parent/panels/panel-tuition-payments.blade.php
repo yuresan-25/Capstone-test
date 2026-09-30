@@ -48,7 +48,14 @@
               @foreach($approvedChildren as $i => $child)
               @php $initials = strtoupper(substr($child->first_name, 0, 1) . substr($child->last_name, 0, 1)); @endphp
               <button type="button" class="child-switch-btn {{ $i === 0 ? 'active' : '' }}" data-index="{{ $i }}" onclick="selectTuitionChild(this, {{ $i }})">
-                <span class="child-switch-avatar">{{ $initials }}</span>
+                <span class="child-switch-avatar" data-child-photo="{{ $child->id }}" data-initials="{{ $initials }}" style="overflow:hidden">
+                  @if($child->photo_url)
+                    <img src="{{ $child->photo_url }}" alt="" style="width:100%;height:100%;object-fit:cover"
+                         onerror="this.replaceWith(document.createTextNode(this.parentElement.dataset.initials))">
+                  @else
+                    {{ $initials }}
+                  @endif
+                </span>
                 <span class="child-switch-text">
                   <span class="child-switch-name">{{ $child->first_name }} {{ $child->last_name }}</span>
                   <span class="child-switch-grade">{{ $child->grade_level }}</span>

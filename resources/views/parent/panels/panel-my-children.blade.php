@@ -61,11 +61,11 @@
            class="child-profile-pane {{ $i !== 0 ? 'd-none' : '' }}" style="max-width:780px;margin:0 auto">
         <div class="card border rounded-3 p-4 mb-4">
           <div class="d-flex align-items-center gap-3 gap-sm-4">
-            <label class="stu-profile-avatar" style="width:72px;height:72px;font-size:26px" title="Click to upload photo">
+            <label class="stu-profile-avatar" data-child-photo="{{ $child->id }}" data-initials="{{ $ci2 }}" style="width:72px;height:72px;font-size:26px" title="Click to upload photo">
               @if($child->photo_url)
                 {{-- If the image still fails to load, fall back to initials. --}}
                 <img src="{{ $child->photo_url }}" alt="{{ $child->first_name }}"
-                     onerror="this.replaceWith(document.createTextNode(@js($ci2)))">
+                     onerror="this.replaceWith(document.createTextNode(this.parentElement.dataset.initials))">
               @else
                 {{ $ci2 }}
               @endif

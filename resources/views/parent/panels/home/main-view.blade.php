@@ -86,7 +86,15 @@
                onmouseover="this.style.boxShadow='0 6px 20px rgba(0,0,0,.1)';this.style.transform='translateY(-2px)'"
                onmouseout="this.style.boxShadow='none';this.style.transform='none'">
             <div class="d-flex flex-column align-items-center text-center gap-2">
-              <div style="width:52px;height:52px;border-radius:50%;background:#1a2a5e;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:17px">{{ $ci }}</div>
+              {{-- data-child-photo: updated live by setChildPhoto() after an upload in My Children. --}}
+              <div data-child-photo="{{ $child->id }}" data-initials="{{ $ci }}" style="width:52px;height:52px;border-radius:50%;background:#1a2a5e;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:17px;overflow:hidden;flex-shrink:0">
+                @if($child->photo_url)
+                  <img src="{{ $child->photo_url }}" alt="{{ $child->first_name }}" style="width:100%;height:100%;object-fit:cover"
+                       onerror="this.replaceWith(document.createTextNode(this.parentElement.dataset.initials))">
+                @else
+                  {{ $ci }}
+                @endif
+              </div>
               <div class="fw-bold" style="font-size:14px;color:#1e293b;line-height:1.2">{{ $child->first_name }} {{ $child->last_name }}</div>
               <div class="text-muted" style="font-size:12px">{{ $child->grade_level ?? '—' }}</div>
               <span class="badge px-3 py-1 rounded-pill fw-semibold mt-1" style="font-size:11px;background:{{ $st['bg'] }};color:{{ $st['color'] }}">

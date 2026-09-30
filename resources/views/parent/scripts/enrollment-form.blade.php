@@ -648,10 +648,27 @@ function handleDocUpload(input, docType) {
   .catch(() => { if (spinner) spinner.classList.add('d-none'); showToast('danger', 'An error occurred. Please try again.'); });
 }
 
+// Shows a child's new photo everywhere it appears on the page at once — the
+// My Children avatar, the Home card and the Tuition child switcher — all
+// marked data-child-photo="<id>". Keeps any other children (like the hidden
+// file input inside the My Children avatar) and drops the initials text.
+function setChildPhoto(enrollmentId, url) {
+  document.querySelectorAll('[data-child-photo="' + enrollmentId + '"]').forEach(function (el) {
+    Array.from(el.childNodes).forEach(function (n) {
+      if (n.nodeType === 3 || n.tagName === 'IMG') n.remove();
+    });
+    var img = document.createElement('img');
+    img.alt = '';
+    img.style.cssText = 'width:100%;height:100%;object-fit:cover;border-radius:50%';
+    img.onerror = function () { img.replaceWith(document.createTextNode(el.dataset.initials || '')); };
+    img.src = url;
+    el.insertBefore(img, el.firstChild);
+  });
+}
+
 // ── Child photo upload (My Children panel avatar) ───────────────────────────
 function handleChildPhotoUpload(input, enrollmentId) {
   if (!input.files || !input.files[0]) return;
-  var avatar = input.closest('.stu-profile-avatar');
 
   var formData = new FormData();
   formData.append('photo', input.files[0]);
@@ -664,15 +681,7 @@ function handleChildPhotoUpload(input, enrollmentId) {
   .then(r => r.json())
   .then(data => {
     if (data.success) {
-      if (avatar) {
-        var img = avatar.querySelector('img');
-        if (!img) {
-          img = document.createElement('img');
-          avatar.insertBefore(img, avatar.firstChild);
-          avatar.childNodes.forEach(n => { if (n.nodeType === 3 && n.textContent.trim()) n.textContent = ''; });
-        }
-        img.src = data.url;
-      }
+      setChildPhoto(enrollmentId, data.url);
       showToast('success', data.message || 'Photo updated.');
     } else {
       showToast('danger', data.message || 'Upload failed.');
