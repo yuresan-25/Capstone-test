@@ -9,6 +9,12 @@
   <link href="{{ asset('vendor/bootstrap/bootstrap.min.css') }}" rel="stylesheet"/>
   <link href="{{ asset('vendor/bootstrap-icons/bootstrap-icons.min.css') }}" rel="stylesheet"/>
   <link href="{{ asset('vendor/flatpickr/flatpickr.min.css') }}" rel="stylesheet"/>
+  {{-- Favicons generated from public/photo/favicon.jpg (the school seal):
+       .ico (16/32/48) for browser tabs, PNG for modern browsers, and a
+       180px icon for phones' "Add to Home Screen". --}}
+  <link rel="icon" href="{{ asset('favicon.ico') }}" sizes="any"/>
+  <link rel="icon" type="image/png" sizes="32x32" href="{{ asset('photo/favicon-32.png') }}"/>
+  <link rel="apple-touch-icon" href="{{ asset('photo/apple-touch-icon.png') }}"/>
   {{-- Loaded here (before @yield('content')) because dashboard/admin/superadmin
        scripts call flatpickr(...) immediately at the top level, not inside a
        click handler — unlike Bootstrap, which those pages only ever touch
