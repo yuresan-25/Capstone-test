@@ -218,7 +218,12 @@ function viewDocument(url, label) {
     window.open(url, '_blank', 'noopener');
     return;
   }
-  document.getElementById('documentViewModalImg').src = url;
+  // Reset the "can't preview" fallback from any previous file.
+  var img = document.getElementById('documentViewModalImg');
+  img.classList.remove('d-none');
+  document.getElementById('documentViewModalError').classList.add('d-none');
+  document.getElementById('documentViewModalOpen').href = url;
+  img.src = url;
   document.getElementById('documentViewModalLabel').textContent = label || 'Document Preview';
   bootstrap.Modal.getOrCreateInstance(document.getElementById('documentViewModal')).show();
 }

@@ -7,7 +7,14 @@
         <button class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
       </div>
       <div class="d-flex align-items-center justify-content-center p-3" style="background:#f8fafc;min-height:300px">
-        <img id="documentViewModalImg" src="" alt="" style="max-width:100%;max-height:70vh;object-fit:contain;border-radius:8px">
+        <img id="documentViewModalImg" src="" alt="" style="max-width:100%;max-height:70vh;object-fit:contain;border-radius:8px"
+             onerror="if (this.getAttribute('src')) { this.classList.add('d-none'); document.getElementById('documentViewModalError').classList.remove('d-none'); }">
+        {{-- Shown instead of a blank box if the file can't be displayed. --}}
+        <div id="documentViewModalError" class="d-none text-center text-muted" style="font-size:13px">
+          <i class="bi bi-file-earmark-x" style="font-size:36px;color:#94a3b8"></i>
+          <div class="mt-2">This file can't be previewed here.</div>
+          <a id="documentViewModalOpen" href="#" target="_blank" rel="noopener" class="btn btn-sm btn-outline-secondary mt-3"><i class="bi bi-box-arrow-up-right me-1"></i>Open in a new tab</a>
+        </div>
       </div>
     </div>
   </div>

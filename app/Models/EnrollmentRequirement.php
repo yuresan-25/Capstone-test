@@ -34,6 +34,10 @@ class EnrollmentRequirement extends Model
      */
     public function getUrlAttribute(): string
     {
-        return Storage::url($this->path);
+        // asset(), not Storage::url(): Storage::url() gave a root-relative
+        // "/storage/..." path that breaks when the site runs from a
+        // subfolder (e.g. XAMPP's /capstone-name/public), leaving the
+        // document preview blank. Same approach as every other upload.
+        return asset('storage/' . $this->path);
     }
 }

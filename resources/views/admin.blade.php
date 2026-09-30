@@ -1242,7 +1242,14 @@ body { margin:0; background:#f1f5f9; }
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body text-center pt-2">
-        <img id="imagePreviewImg" src="" alt="Preview" style="max-width:100%;max-height:70vh;border-radius:10px;border:1px solid #e2e8f0;object-fit:contain">
+        <img id="imagePreviewImg" src="" alt="Preview" style="max-width:100%;max-height:70vh;border-radius:10px;border:1px solid #e2e8f0;object-fit:contain"
+             onerror="if (this.getAttribute('src')) { this.classList.add('d-none'); document.getElementById('imagePreviewError').classList.remove('d-none'); }">
+        {{-- PDFs (allowed for documents and payment receipts) can't render in an <img>. --}}
+        <iframe id="imagePreviewFrame" class="d-none" title="Document preview" style="width:100%;height:70vh;border:1px solid #e2e8f0;border-radius:10px"></iframe>
+        <div id="imagePreviewError" class="d-none text-muted py-5" style="font-size:13px">
+          <i class="bi bi-file-earmark-x" style="font-size:36px;color:#94a3b8"></i>
+          <div class="mt-2">This file can't be previewed here. Try "Open Full Size".</div>
+        </div>
       </div>
       <div class="modal-footer border-0 pt-0">
         <a id="imagePreviewOpenNew" href="#" target="_blank" class="btn btn-outline-secondary btn-sm">
@@ -1980,9 +1987,19 @@ document.addEventListener('click', function (e) {
 /* Generic in-page viewer for requirement docs / payment proofs.
    Keeps the admin on the current page (and current modal underneath)
    instead of navigating to a new tab. */
+function isPdfUrl(url) { return /\.pdf($|[?#])/i.test(String(url || '')); }
+
 function showImagePreview(url, title) {
+  const img   = document.getElementById('imagePreviewImg');
+  const frame = document.getElementById('imagePreviewFrame');
+  const pdf   = isPdfUrl(url);
+
   document.getElementById('imagePreviewTitle').textContent = title || 'Preview';
-  document.getElementById('imagePreviewImg').src = url;
+  document.getElementById('imagePreviewError').classList.add('d-none');
+  img.classList.toggle('d-none', pdf);
+  frame.classList.toggle('d-none', !pdf);
+  if (pdf) { img.removeAttribute('src'); frame.src = url; }
+  else     { frame.removeAttribute('src'); img.src = url; }
   document.getElementById('imagePreviewOpenNew').href = url;
   new bootstrap.Modal(document.getElementById('imagePreviewModal')).show();
 }
@@ -2068,9 +2085,13 @@ function showPaymentNotifModal(data) {
   document.getElementById('notifModalSubmitted').textContent = data.submitted_at || '—';
 
   const proofWrap = document.getElementById('notifModalProofWrap');
-  if (data.proof_of_payment) {
-    proofWrap.innerHTML = `<a href="${data.proof_of_payment}" target="_blank">
-      <img src="${data.proof_of_payment}" alt="Proof of payment" style="max-width:100%;max-height:260px;border-radius:10px;border:1px solid #e2e8f0;object-fit:contain">
+  const proofUrl = data.proof_of_payment ? encodeURI(String(data.proof_of_payment)) : '';
+  if (proofUrl && isPdfUrl(proofUrl)) {
+    proofWrap.innerHTML = `<button type="button" class="btn btn-outline-secondary btn-sm" onclick="showImagePreview('${escapeHtml(proofUrl)}', 'Proof of Payment')"><i class="bi bi-file-earmark-pdf me-1"></i>View PDF receipt</button>`;
+  } else if (proofUrl) {
+    proofWrap.innerHTML = `<a href="${escapeHtml(proofUrl)}" target="_blank" rel="noopener">
+      <img src="${escapeHtml(proofUrl)}" alt="Proof of payment" style="max-width:100%;max-height:260px;border-radius:10px;border:1px solid #e2e8f0;object-fit:contain"
+           onerror="this.closest('a').outerHTML='<div class=&quot;text-muted&quot; style=&quot;font-size:12.5px&quot;>The receipt image could not be loaded.</div>'">
     </a>`;
   } else {
     proofWrap.innerHTML = '<div class="text-muted" style="font-size:12.5px">No proof image attached.</div>';
