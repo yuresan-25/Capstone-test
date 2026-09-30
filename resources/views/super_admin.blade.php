@@ -681,22 +681,27 @@ body { margin:0; background:#f1f5f9; }
             <i class="bi bi-archive-fill text-white" style="font-size:18px"></i>
             <span class="fw-bold text-white" style="font-size:16px">Enrollment History</span>
           </div>
-          <div class="text-white-50" style="font-size:13px">Per-school-year enrollment records across all grade levels</div>
+          <div class="text-white-50" style="font-size:13px">Enrollment numbers per grade level, from the system's real records</div>
         </div>
-        <button class="btn btn-light btn-sm fw-semibold px-3" onclick="alert('Exporting all SY history...')">
-          <i class="bi bi-download me-1"></i>Export All
-        </button>
+        <div class="dropdown">
+          <button class="btn btn-light btn-sm fw-semibold px-3 dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">
+            <i class="bi bi-download me-1"></i>Export All
+          </button>
+          <ul class="dropdown-menu dropdown-menu-end shadow-sm">
+            <li><a class="dropdown-item" href="{{ route('superadmin.history.export', ['format' => 'pdf']) }}"><i class="bi bi-file-earmark-pdf me-2 text-danger"></i>PDF — printable report</a></li>
+            <li><a class="dropdown-item" href="{{ route('superadmin.history.export', ['format' => 'csv']) }}"><i class="bi bi-filetype-csv me-2 text-success"></i>CSV — for Excel / Sheets</a></li>
+          </ul>
+        </div>
       </div>
-    </div>
-
-    <!-- SY filter pills -->
-    <div class="d-flex flex-wrap gap-2 mb-4" id="syFilterPills">
-      <button class="btn btn-sm fw-semibold px-3 sy-pill active" data-sy="all" onclick="filterSYHistory('all',this)" style="background:#7c3aed;color:#fff;border:none">All Years</button>
-      <button class="btn btn-sm fw-semibold px-3 sy-pill" data-sy="2025-2026" onclick="filterSYHistory('2025-2026',this)" style="background:#f1f5f9;color:#475569;border:1px solid #e2e8f0">SY 2025–2026</button>
     </div>
 
     <!-- SY history cards -->
     <div id="syHistoryList"></div>
+
+    <div class="d-flex align-items-start gap-2 p-3 rounded-3" style="background:#f8fafc;border:1px dashed #cbd5e1;font-size:12.5px;color:#64748b">
+      <i class="bi bi-archive flex-shrink-0 mt-1"></i>
+      <span>No archived school years yet. Past school years will be listed here once the system has been used across more than one school year.</span>
+    </div>
 
   </div>
 
@@ -1113,19 +1118,9 @@ function switchSATab(tab, el) {
 }
 
 /* ── Enrollment History data & render ── */
-const _saHistoryData = [
-  {
-    sy: 'SY 2025\u20132026', key: '2025-2026', status: 'active',
-    period: 'June 1, 2025 \u2013 July 31, 2025',
-    totalEnrolled: 271, totalApplications: 301, totalSections: 8,
-    grades: [
-      { label: 'Grade 7',  students: 64,  sections: 2, approved: 66 },
-      { label: 'Grade 8',  students: 58,  sections: 2, approved: 60 },
-      { label: 'Grade 9',  students: 82,  sections: 2, approved: 86 },
-      { label: 'Grade 10', students: 67,  sections: 2, approved: 89 },
-    ]
-  },
-];
+// Current school year only, computed from the database
+// (SuperAdminController::enrollmentSummary) — no sample/demo records.
+const _saHistoryData = [@json(\App\Http\Controllers\SuperAdminController::enrollmentSummary())];
 
 const _saGradeColors = {
   'Grade 7':  { bg: '#ccfbf1', color: '#0f766e' },
@@ -1145,8 +1140,10 @@ function renderSYHistory(filter) {
     var subColor = isActive ? 'rgba(255,255,255,.7)' : '#64748b';
 
     var statCards = [
-      { icon: 'bi-people-fill',       label: 'Total Enrolled',      val: rec.totalEnrolled,     bg: isActive ? 'rgba(255,255,255,.15)' : '#eff6ff', c: isActive ? '#fff' : '#1e40af' },
-      { icon: 'bi-file-earmark-text', label: 'Applications',        val: rec.totalApplications, bg: isActive ? 'rgba(255,255,255,.15)' : '#fefce8', c: isActive ? '#fff' : '#713f12' },
+      { icon: 'bi-file-earmark-text', label: 'Applications',  val: rec.totalApplications, bg: '#fefce8', c: '#713f12' },
+      { icon: 'bi-hourglass-split',   label: 'Pending',       val: rec.totalPending,      bg: '#fff7ed', c: '#c2410c' },
+      { icon: 'bi-check-circle-fill', label: 'Approved',      val: rec.totalApproved,     bg: '#f0fdf4', c: '#166534' },
+      { icon: 'bi-people-fill',       label: 'Enrolled',      val: rec.totalEnrolled,     bg: '#eff6ff', c: '#1e40af' },
     ].map(function(s) {
       return '<div class="col-6 col-md-3">' +
         '<div class="rounded-3 p-3 text-center" style="background:'+s.bg+'">' +
@@ -1158,12 +1155,13 @@ function renderSYHistory(filter) {
 
     var gradeRows = rec.grades.map(function(g) {
       var c = _saGradeColors[g.label] || { bg: '#f1f5f9', color: '#475569' };
-      var rate = Math.round((g.students / g.approved) * 100);
+      var rate = g.applications ? Math.round((g.approved / g.applications) * 100) : 0;
       return '<tr style="font-size:13px">' +
         '<td><span class="badge rounded-pill px-3" style="background:'+c.bg+';color:'+c.color+';font-weight:700">'+g.label+'</span></td>' +
         '<td class="text-center">'+g.sections+'</td>' +
+        '<td class="text-center">'+g.applications+'</td>' +
         '<td class="text-center">'+g.approved+'</td>' +
-        '<td class="text-center fw-bold" style="color:#166534">'+g.students+'</td>' +
+        '<td class="text-center fw-bold" style="color:#166534">'+g.enrolled+'</td>' +
         '<td><div style="display:flex;align-items:center;gap:8px"><div style="flex:1;background:#e2e8f0;border-radius:20px;height:7px;overflow:hidden"><div style="width:'+rate+'%;height:100%;background:'+c.color+';border-radius:20px"></div></div><span style="font-size:11.5px;color:#64748b;white-space:nowrap">'+rate+'%</span></div></td>' +
       '</tr>';
     }).join('');
@@ -1183,24 +1181,25 @@ function renderSYHistory(filter) {
           '<i class="bi bi-chevron-down" style="color:'+headerColor+'"></i>' +
         '</div>' +
       '</div>' +
-      '<div class="d-none" style="background:#fff">' +
-        '<div class="row g-3 p-3">'+statCards+'</div>' +
+      '<div class="'+(isActive ? '' : 'd-none')+'" style="background:#fff">' +
+        '<div class="p-3"><div class="row g-3">'+statCards+'</div></div>' +
         '<div class="px-3 pb-3">' +
           '<div class="table-responsive">' +
             '<table class="table table-hover align-middle mb-0" style="border-top:1px solid #f1f5f9">' +
               '<thead class="table-light">' +
                 '<tr><th style="font-size:12px;text-transform:uppercase;color:#64748b">Grade</th>' +
                 '<th class="text-center" style="font-size:12px;text-transform:uppercase;color:#64748b">Sections</th>' +
+                '<th class="text-center" style="font-size:12px;text-transform:uppercase;color:#64748b">Applications</th>' +
                 '<th class="text-center" style="font-size:12px;text-transform:uppercase;color:#64748b">Approved</th>' +
                 '<th class="text-center" style="font-size:12px;text-transform:uppercase;color:#64748b">Enrolled</th>' +
-                '<th style="font-size:12px;text-transform:uppercase;color:#64748b;min-width:140px">Rate</th></tr>' +
+                '<th style="font-size:12px;text-transform:uppercase;color:#64748b;min-width:140px">Approval Rate</th></tr>' +
               '</thead>' +
               '<tbody>'+gradeRows+'</tbody>' +
             '</table>' +
           '</div>' +
-          '<div class="d-flex gap-2 mt-3 justify-content-end">' +
-            '<button class="btn btn-sm btn-outline-secondary" onclick="alert(\'Exporting '+rec.sy+'...\')"><i class="bi bi-download me-1"></i>Export</button>' +
-            (!isActive ? '<button class="btn btn-sm" style="background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe" onclick="alert(\'Full report for '+rec.sy+'...\')"><i class="bi bi-eye me-1"></i>Full Report</button>' : '') +
+          '<div class="d-flex gap-2 mt-3 justify-content-end flex-wrap">' +
+            '<a class="btn btn-sm btn-outline-secondary" href="{{ route('superadmin.history.export', ['format' => 'pdf']) }}"><i class="bi bi-file-earmark-pdf me-1"></i>Export PDF</a>' +
+            '<a class="btn btn-sm btn-outline-secondary" href="{{ route('superadmin.history.export', ['format' => 'csv']) }}"><i class="bi bi-filetype-csv me-1"></i>Export CSV</a>' +
           '</div>' +
         '</div>' +
       '</div>' +
@@ -1208,17 +1207,6 @@ function renderSYHistory(filter) {
   }).join('') || '<div class="text-center text-muted py-5"><i class="bi bi-archive" style="font-size:40px"></i><div class="mt-2">No records for this school year.</div></div>';
 }
 
-function filterSYHistory(sy, btn) {
-  document.querySelectorAll('.sy-pill').forEach(function(p) {
-    p.style.background = '#f1f5f9';
-    p.style.color = '#475569';
-    p.style.border = '1px solid #e2e8f0';
-  });
-  btn.style.background = '#7c3aed';
-  btn.style.color = '#fff';
-  btn.style.border = 'none';
-  renderSYHistory(sy);
-}
 
 
 /* Sidebar mobile toggle */

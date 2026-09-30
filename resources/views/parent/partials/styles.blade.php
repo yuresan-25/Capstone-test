@@ -15,7 +15,9 @@
   .form-control.is-invalid:focus,.form-select.is-invalid:focus{box-shadow:0 0 0 3px rgba(220,38,38,.15);}
   .stu-profile-avatar-lg{width:90px;height:90px;border-radius:50%;background:#1a2a5e;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:28px;overflow:hidden;}
   .stu-profile-avatar-lg img{width:100%;height:100%;object-fit:cover;border-radius:50%;}
-  .stu-profile-avatar{width:58px;height:58px;border-radius:50%;background:#1a2a5e;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:18px;cursor:pointer;}
+  /* flex-shrink:0 keeps it a circle — beside a long name/badge on a phone the
+     row used to squeeze its width into an oval. */
+  .stu-profile-avatar{width:58px;height:58px;border-radius:50%;background:#1a2a5e;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:18px;cursor:pointer;flex-shrink:0;overflow:hidden;}
   .step-num{width:30px;height:30px;border-radius:50%;background:rgba(255,255,255,.25);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;flex-shrink:0;}
   .step-card{transition:box-shadow .2s;}
   .step-card:hover{box-shadow:0 4px 16px rgba(0,0,0,.1);}

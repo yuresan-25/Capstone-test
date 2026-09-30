@@ -168,7 +168,11 @@
       .tp-btn-outline:hover { background:#f8fafc; }
       @media (max-width: 575.98px) {
         .tp-row { flex-wrap:wrap; }
-        .tp-row-right { width:100%; justify-content:space-between; padding-left:44px; }
+        .tp-row-right { width:100%; justify-content:space-between; padding-left:44px; flex-wrap:wrap; row-gap:8px; }
+      }
+      @media (max-width: 359.98px) {
+        /* Smallest phones: drop the indent under the number circle. */
+        .tp-row-right { padding-left:0; }
       }
 
       /* History */

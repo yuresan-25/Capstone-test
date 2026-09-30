@@ -26,6 +26,9 @@ $scopedGrades  = $currentAdmin->assigned_grades ?: null;
 $allGradeLevelOptions = ['Kinder','Grade 1','Grade 2','Grade 3','Grade 4','Grade 5','Grade 6','Grade 7','Grade 8','Grade 9','Grade 10'];
 $gradeLevelOptions    = $scopedGrades ? array_values(array_intersect($allGradeLevelOptions, $scopedGrades)) : $allGradeLevelOptions;
 
+/* Current school year label, e.g. "SY 2026–2027" (was hand-typed). */
+$currentSchoolYear = ($sy = \App\Models\EnrollmentPeriod::current()?->school_year) ? 'SY ' . str_replace('-', '–', $sy) : 'Current School Year';
+
 /* ── Real DB data ──
    Both tables are paginated (25 per page) with a server-side search, and
    every installment's proofs are loaded up front — previously the page
@@ -558,7 +561,7 @@ body { margin:0; background:#f1f5f9; }
             <i class="bi bi-bell-fill"></i>
             <span id="notifBadge" class="d-none" style="position:absolute;top:-4px;right:-4px;background:#dc2626;color:#fff;border-radius:999px;font-size:10px;line-height:1;min-width:16px;height:16px;display:flex;align-items:center;justify-content:center;padding:2px;font-weight:700"></span>
           </div>
-          <div id="notifDropdown" class="d-none" style="position:absolute;right:0;top:44px;width:340px;max-height:420px;overflow-y:auto;background:#fff;border:1px solid #e2e8f0;border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,.12);z-index:200">
+          <div id="notifDropdown" class="d-none notif-dropdown" style="position:absolute;right:0;top:44px;width:340px;max-height:420px;overflow-y:auto;background:#fff;border:1px solid #e2e8f0;border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,.12);z-index:200">
             <div style="padding:12px 14px;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;justify-content:between;gap:8px">
               <span style="font-size:13px;font-weight:700;color:#1e293b">Notifications</span>
               <button type="button" class="btn btn-link btn-sm ms-auto p-0" style="font-size:11.5px;text-decoration:none" onclick="markAllNotifsRead(event)">Mark all read</button>
@@ -918,9 +921,6 @@ body { margin:0; background:#f1f5f9; }
               <div class="text-muted" style="font-size:13px">Click a grade level to view its sections</div>
             </div>
             <div class="d-flex gap-2 flex-wrap">
-              <button class="btn btn-sm fw-semibold px-3" style="background:#f1f5f9;color:#475569;border:1px solid #e2e8f0" onclick="openSYArchiveModal()">
-                <i class="bi bi-archive me-1"></i>SY Archives
-              </button>
               <a href="?modal=createSection" class="btn btn-navy btn-sm fw-semibold">
                 <i class="bi bi-plus-circle me-1"></i>Generate Sections
               </a>
@@ -930,7 +930,7 @@ body { margin:0; background:#f1f5f9; }
           <!-- Current SY pill -->
           <div class="d-flex align-items-center gap-2 mb-4 p-2 rounded-2" style="background:#eff6ff;border:1px solid #bfdbfe;font-size:13px">
             <i class="bi bi-calendar2-week-fill" style="color:#1e40af"></i>
-            <span class="fw-semibold" style="color:#1e40af">Currently Viewing: SY 2025–2026</span>
+            <span class="fw-semibold" style="color:#1e40af">Currently Viewing: {{ $currentSchoolYear }}</span>
             <span class="badge rounded-pill ms-1" style="background:#1e3a8a;color:#fff;font-size:11px">Active</span>
           </div>
 
@@ -956,7 +956,7 @@ body { margin:0; background:#f1f5f9; }
                     No sections yet
                   @endif
                   @if($unsectionedCount > 0)
-                    &bull; <span style="color:#b45309">{{ $unsectionedCount }} awaiting sectioning</span>
+                    &bull; <span style="color:#b45309;white-space:nowrap">{{ $unsectionedCount }} awaiting sectioning</span>
                   @endif
                 </div>
               </div>
@@ -1350,7 +1350,7 @@ body { margin:0; background:#f1f5f9; }
             <div style="font-size:22px;font-weight:800;color:#fff">{{ $pFullName }}</div>
             <div class="d-flex align-items-center gap-2 mt-2 flex-wrap">
               <span style="background:rgba(255,255,255,.15);color:#fff;font-size:12px;font-weight:600;padding:3px 10px;border-radius:20px">{{ $p->grade_level }}</span>
-              <span style="background:rgba(255,255,255,.15);color:#fff;font-size:12px;font-weight:600;padding:3px 10px;border-radius:20px">SY 2025–2026</span>
+              <span style="background:rgba(255,255,255,.15);color:#fff;font-size:12px;font-weight:600;padding:3px 10px;border-radius:20px">{{ $currentSchoolYear }}</span>
               <span style="background:rgba(255,255,255,.15);color:#fff;font-size:12px;font-weight:600;padding:3px 10px;border-radius:20px">{{ $p->preferred_session }} Class</span>
               @if($p->status === 'enrolled')
               <span style="background:#dcfce7;color:#166534;font-size:12px;font-weight:700;padding:3px 10px;border-radius:20px">● Enrolled</span>
@@ -1860,32 +1860,6 @@ body { margin:0; background:#f1f5f9; }
   </div>
 </div>
 <?php endif; ?>
-
-<!-- ===================== MODAL: SY ARCHIVES ===================== -->
-<div class="modal fade" id="syArchiveModal" tabindex="-1">
-  <div class="modal-dialog modal-lg modal-dialog-scrollable modal-dialog-centered">
-    <div class="modal-content border-0 shadow-lg" style="border-radius:18px;overflow:hidden">
-      <div style="background:linear-gradient(135deg,#1e3a8a,#0d9488);padding:24px 28px 20px;position:relative">
-        <button type="button" class="btn-close btn-close-white position-absolute top-0 end-0 m-3" data-bs-dismiss="modal"></button>
-        <div class="d-flex align-items-center gap-3">
-          <div style="width:44px;height:44px;border-radius:12px;background:rgba(255,255,255,.18);display:flex;align-items:center;justify-content:center;font-size:22px;color:#fff">
-            <i class="bi bi-archive-fill"></i>
-          </div>
-          <div>
-            <div style="font-size:17px;font-weight:800;color:#fff">School Year Archives</div>
-            <div style="font-size:12px;color:rgba(255,255,255,.7)">Past enrollment batches by school year — click a row to expand</div>
-          </div>
-        </div>
-      </div>
-      <div class="modal-body p-4" id="syArchiveBody" style="background:#f8fafc">
-        <!-- Rendered by JS -->
-      </div>
-      <div class="modal-footer border-0 bg-white px-4 pb-4">
-        <button class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Close</button>
-      </div>
-    </div>
-  </div>
-</div>
 
 <!-- Bootstrap JS already loaded once, globally, by layout/app.blade.php -->
 <script src="{{ asset('vendor/chartjs/chart.umd.js') }}"></script>
@@ -2587,79 +2561,6 @@ function showToast(msg) {
   setTimeout(() => t.remove(), 3500);
 }
 
-/* ── SY Archive modal ── */
-const _syArchives = [
-  {
-    sy: 'SY 2025\u20132026', status: 'active',
-    grades: [
-      { label: 'Grade 7',  sections: 2, students: 64,  cap: 90 },
-      { label: 'Grade 8',  sections: 2, students: 58,  cap: 90 },
-      { label: 'Grade 9',  sections: 2, students: 82,  cap: 90 },
-      { label: 'Grade 10', sections: 2, students: 67,  cap: 90 },
-    ]
-  },
-  {
-    sy: 'SY 2024\u20132025', status: 'archived',
-    grades: [
-      { label: 'Grade 7',  sections: 2, students: 61,  cap: 90 },
-      { label: 'Grade 8',  sections: 2, students: 55,  cap: 90 },
-      { label: 'Grade 9',  sections: 2, students: 79,  cap: 90 },
-      { label: 'Grade 10', sections: 2, students: 63,  cap: 90 },
-    ]
-  },
-  {
-    sy: 'SY 2023\u20132024', status: 'archived',
-    grades: [
-      { label: 'Grade 7',  sections: 2, students: 58,  cap: 90 },
-      { label: 'Grade 8',  sections: 2, students: 52,  cap: 90 },
-      { label: 'Grade 9',  sections: 2, students: 74,  cap: 90 },
-      { label: 'Grade 10', sections: 2, students: 60,  cap: 90 },
-    ]
-  },
-];
-
-const gradeArchiveColors = {
-  'Grade 7':  { bg: '#ccfbf1', color: '#0f766e' },
-  'Grade 8':  { bg: '#fef3c7', color: '#b45309' },
-  'Grade 9':  { bg: '#fce7f3', color: '#be185d' },
-  'Grade 10': { bg: '#eff6ff', color: '#1e40af' },
-};
-
-function openSYArchiveModal() {
-  const body = document.getElementById('syArchiveBody');
-  body.innerHTML = _syArchives.map(function(rec) {
-    var isActive = rec.status === 'active';
-    var totalStudents = rec.grades.reduce(function(s,g){ return s+g.students; }, 0);
-    var totalSections = rec.grades.reduce(function(s,g){ return s+g.sections; }, 0);
-    var gradeRows = rec.grades.map(function(g) {
-      var c = gradeArchiveColors[g.label] || { bg: '#f1f5f9', color: '#475569' };
-      var pct = Math.round((g.students / g.cap) * 100);
-      return '<div class="d-flex align-items-center gap-3 py-2" style="border-bottom:1px solid #f1f5f9">' +
-        '<span class="rounded-pill px-2" style="background:'+c.bg+';color:'+c.color+';font-size:11.5px;font-weight:700;white-space:nowrap">'+g.label+'</span>' +
-        '<div class="flex-grow-1">' +
-          '<div class="d-flex justify-content-between mb-1" style="font-size:11.5px;color:#64748b"><span>'+g.sections+' section'+(g.sections>1?'s':'')+'</span><span>'+g.students+' students</span></div>' +
-          '<div style="background:#e2e8f0;border-radius:20px;height:6px;overflow:hidden"><div style="width:'+pct+'%;height:100%;background:'+c.color+';border-radius:20px"></div></div>' +
-        '</div></div>';
-    }).join('');
-    var exportBtn = '<button class="btn btn-sm btn-outline-secondary" onclick="alert(\'Exporting '+rec.sy+' data...\')"><i class="bi bi-download me-1"></i>Export</button>';
-    var reportBtn = !isActive ? '<button class="btn btn-sm ms-2" style="background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe" onclick="alert(\'Viewing '+rec.sy+' report...\')"><i class="bi bi-eye me-1"></i>View Report</button>' : '';
-    return '<div class="card border rounded-3 mb-3 overflow-hidden">' +
-      '<div class="d-flex align-items-center justify-content-between p-3 flex-wrap gap-2" style="background:'+(isActive?'linear-gradient(135deg,#1e3a8a,#0d9488)':'#f8fafc')+';cursor:pointer" onclick="this.nextElementSibling.classList.toggle(\'d-none\')">' +
-        '<div class="d-flex align-items-center gap-3">' +
-          '<div style="width:40px;height:40px;border-radius:10px;background:'+(isActive?'rgba(255,255,255,.18)':'#e2e8f0')+';display:flex;align-items:center;justify-content:center;font-size:18px;color:'+(isActive?'#fff':'#64748b')+'">' +
-            '<i class="bi bi-calendar2-week-fill"></i></div>' +
-          '<div><div class="fw-bold" style="font-size:14.5px;color:'+(isActive?'#fff':'#1e293b')+'">'+rec.sy+'</div>' +
-          '<div style="font-size:12px;color:'+(isActive?'rgba(255,255,255,.7)':'#94a3b8')+'">'+totalSections+' sections &bull; '+totalStudents+' students enrolled</div></div>' +
-        '</div>' +
-        '<span class="badge rounded-pill px-3" style="background:'+(isActive?'rgba(255,255,255,.2)':'#f1f5f9')+';color:'+(isActive?'#fff':'#64748b')+';font-size:11px">'+(isActive?'&#9679; Active':'&#9675; Archived')+'</span>' +
-      '</div>' +
-      '<div class="p-3 d-none">'+gradeRows+
-        '<div class="d-flex gap-2 mt-3 justify-content-end">'+exportBtn+reportBtn+'</div>' +
-      '</div></div>';
-  }).join('');
-  new bootstrap.Modal(document.getElementById('syArchiveModal')).show();
-}
-
 /* ── Auto section (section tab, grade picker) ── */
 const enrolledCounts = { g7:64, g8:58, g9:82, g10:67 };
 const LETTERS = ['A','B','C','D','E','F'];
@@ -2783,14 +2684,14 @@ function renderMasterList(students, gradeLabel, sectionName) {
         <div style="font-size:13px;font-weight:700;text-transform:uppercase">Premiere Heights Learning Center, Inc.</div>
         <div style="font-size:11px;color:#475569">Carmona, Cavite</div>
         <div style="font-size:14px;font-weight:800;margin-top:8px;text-transform:uppercase;letter-spacing:.05em">Class Master List</div>
-        <div style="font-size:12px">${gradeLabel} – ${sectionName} &nbsp;|&nbsp; SY 2025–2026</div>
+        <div style="font-size:12px">${gradeLabel} – ${sectionName} &nbsp;|&nbsp; {{ $currentSchoolYear }}</div>
         <div style="border-bottom:2px solid #1e293b;margin:10px 0"></div>
       </div>
       <div class="no-print d-flex align-items-center gap-3 mb-3 p-3 rounded-3" style="background:linear-gradient(135deg,${gc.gradient});color:#fff">
         <div style="width:48px;height:48px;border-radius:12px;background:rgba(255,255,255,.18);display:flex;align-items:center;justify-content:center;font-size:22px"><i class="bi bi-list-columns-reverse"></i></div>
         <div>
           <div style="font-size:17px;font-weight:800">${gradeLabel} – ${sectionName}</div>
-          <div style="font-size:12px;opacity:.8">SY 2025–2026 &nbsp;|&nbsp; ${students.length} students enrolled</div>
+          <div style="font-size:12px;opacity:.8">{{ $currentSchoolYear }} &nbsp;|&nbsp; ${students.length} students enrolled</div>
         </div>
       </div>
       <div class="table-responsive">
@@ -2903,7 +2804,7 @@ document.addEventListener('DOMContentLoaded', () => {
           </div>
           <div>
             <h5 class="modal-title fw-bold mb-0" style="color:#1e293b">Class Master List</h5>
-            <div class="text-muted" style="font-size:12px">SY 2025–2026 &nbsp;|&nbsp; PHLCI</div>
+            <div class="text-muted" style="font-size:12px">{{ $currentSchoolYear }} &nbsp;|&nbsp; PHLCI</div>
           </div>
         </div>
         <div class="d-flex gap-2 align-items-center ms-auto">

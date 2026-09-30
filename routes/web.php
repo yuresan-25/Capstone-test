@@ -166,6 +166,9 @@ Route::middleware(['auth:web', 'role:superadmin'])->prefix('superadmin')->name('
     Route::delete('/profile/photo', [ProfileController::class, 'removePhoto'])->name('profile.photo.remove');
     Route::put('/profile/password', [ProfileController::class, 'updatePassword'])->name('profile.password');
 
+    // Enrollment History export (PDF / CSV of the current school year)
+    Route::get('/history/export', [SuperAdminController::class, 'exportHistory'])->name('history.export');
+
     // Tuition rate configuration
     Route::put('/tuition/grade-fees', [TuitionController::class, 'updateGradeFees'])->name('tuition.gradeFees.update');
     //terns of use

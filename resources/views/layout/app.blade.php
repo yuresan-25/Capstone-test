@@ -414,9 +414,18 @@ img.brand-logo {
   font-size: 15px; font-weight: 700; color: var(--text-dark);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+/* Wraps instead of truncating — on phones the "N awaiting sectioning"
+   count at the end used to be cut off. */
 .grade-meta {
   font-size: 12.5px; color: var(--text-muted); margin-top: 2px;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  white-space: normal; overflow-wrap: anywhere;
+}
+
+/* Admin notification dropdown: on phones the 340px panel anchored to the
+   bell ran off the left edge — span the screen with a margin instead.
+   (!important beats the element's inline desktop sizing.) */
+@media (max-width: 575.98px) {
+  .notif-dropdown { position: fixed !important; left: 12px !important; right: 12px !important; top: 64px !important; width: auto !important; max-height: 70vh !important; }
 }
 
 .grade-bar-wrap { flex: 0 1 120px; min-width: 40px; display: flex; align-items: center; gap: 10px; margin-left: auto; }
@@ -531,7 +540,7 @@ img.brand-logo {
   background: var(--navy-light); display: flex; align-items: center; justify-content: center;
   font-size: 22px; font-weight: 700; color: var(--navy);
   cursor: pointer; border: 2px dashed var(--gold); position: relative;
-  overflow: hidden;
+  overflow: hidden; flex-shrink: 0;
 }
 .stu-profile-avatar img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
 

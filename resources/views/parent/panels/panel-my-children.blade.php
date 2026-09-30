@@ -60,24 +60,28 @@
       <div id="child-profile-pane-{{ $child->id }}" data-child-id="{{ $child->id }}"
            class="child-profile-pane {{ $i !== 0 ? 'd-none' : '' }}" style="max-width:780px;margin:0 auto">
         <div class="card border rounded-3 p-4 mb-4">
-          <div class="d-flex align-items-center gap-4">
+          <div class="d-flex align-items-center gap-3 gap-sm-4">
             <label class="stu-profile-avatar" style="width:72px;height:72px;font-size:26px" title="Click to upload photo">
               @if($child->photo_url)
-                <img src="{{ $child->photo_url }}" alt="{{ $child->first_name }}">
+                {{-- If the image still fails to load, fall back to initials. --}}
+                <img src="{{ $child->photo_url }}" alt="{{ $child->first_name }}"
+                     onerror="this.replaceWith(document.createTextNode(@js($ci2)))">
               @else
                 {{ $ci2 }}
               @endif
               <input type="file" accept="image/jpeg,image/png,image/webp" style="display:none" onchange="handleChildPhotoUpload(this, {{ $child->id }})">
             </label>
-            <div>
-              <div class="fw-bold" style="font-size:20px;color:#1e293b">{{ $child->first_name }} {{ $child->last_name }}</div>
+            {{-- min-width:0 lets this column shrink beside the photo; the
+                 status badge below may wrap instead of overflowing the card. --}}
+            <div style="min-width:0">
+              <div class="fw-bold" style="font-size:20px;color:#1e293b;overflow-wrap:anywhere">{{ $child->first_name }} {{ $child->last_name }}</div>
               <div class="text-muted" style="font-size:13px">LRN: <span class="fw-semibold text-dark">{{ $child->lrn ?? 'N/A' }}</span></div>
               <div class="text-muted" style="font-size:13px">Grade Level: <span class="fw-semibold text-dark">{{ $child->grade_level ?? '—' }}</span></div>
               <div class="mt-1">
                 @if($child->status === 'enrolled')
                   <span class="badge bg-success-subtle text-success px-3 py-1 rounded-pill">Enrolled</span>
                 @elseif($child->status === 'approved')
-                  <span class="badge bg-info-subtle text-info px-3 py-1 rounded-pill">Approved – Awaiting Sectioning</span>
+                  <span class="badge bg-info-subtle text-info px-3 py-1 rounded-pill" style="white-space:normal;text-align:left;line-height:1.35">Approved – Awaiting Sectioning</span>
                 @else
                   <span class="badge bg-warning-subtle text-warning px-3 py-1 rounded-pill">Pending Review</span>
                 @endif

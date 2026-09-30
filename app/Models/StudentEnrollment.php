@@ -66,7 +66,15 @@ class StudentEnrollment extends Model
      */
     public function getPhotoUrlAttribute(): ?string
     {
-        return $this->photo ? \Illuminate\Support\Facades\Storage::url($this->photo) : null;
+        // null when the file is gone (e.g. uploaded to a server whose
+        // storage was later wiped) so the page shows initials instead of a
+        // broken image. asset() rather than Storage::url(): it uses the
+        // site's actual address, not APP_URL, same as every other upload.
+        if (! $this->photo || ! \Illuminate\Support\Facades\Storage::disk('public')->exists($this->photo)) {
+            return null;
+        }
+
+        return asset('storage/' . $this->photo);
     }
 
     public function tuitionPlan(): \Illuminate\Database\Eloquent\Relations\HasOne

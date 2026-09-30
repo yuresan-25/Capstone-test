@@ -17,6 +17,108 @@ use Illuminate\Validation\Rules\Password;
 class SuperAdminController extends Controller
 {
     /* ──────────────────────────────────────────────
+       ENROLLMENT HISTORY (current school year, real data)
+    ────────────────────────────────────────────── */
+
+    private const GRADES = ['Kinder', 'Grade 1', 'Grade 2', 'Grade 3', 'Grade 4', 'Grade 5', 'Grade 6', 'Grade 7', 'Grade 8', 'Grade 9', 'Grade 10'];
+
+    /**
+     * Per-grade enrollment numbers for the current school year, straight
+     * from the database. Enrollments aren't stored per school year yet, so
+     * this is the current year only — archived years will appear once the
+     * system has been used across more than one school year.
+     */
+    public static function enrollmentSummary(): array
+    {
+        $period = EnrollmentPeriod::current();
+
+        $counts = \App\Models\StudentEnrollment::where('status', '!=', 'draft')
+            ->selectRaw('grade_level, status, COUNT(*) as total')
+            ->groupBy('grade_level', 'status')
+            ->get()
+            ->groupBy('grade_level');
+
+        $sections = \App\Models\Section::selectRaw('grade_level, COUNT(*) as total')
+            ->groupBy('grade_level')
+            ->pluck('total', 'grade_level');
+
+        $grades = [];
+        foreach (self::GRADES as $grade) {
+            $byStatus = ($counts[$grade] ?? collect())->pluck('total', 'status');
+            $pending  = (int) ($byStatus['pending'] ?? 0);
+            $approved = (int) ($byStatus['approved'] ?? 0);
+            $enrolled = (int) ($byStatus['enrolled'] ?? 0);
+            $applications = $pending + $approved + $enrolled + (int) ($byStatus['rejected'] ?? 0);
+
+            $grades[] = [
+                'label'        => $grade,
+                'sections'     => (int) ($sections[$grade] ?? 0),
+                'applications' => $applications,
+                'pending'      => $pending,
+                // Approved = cleared admin review, whether or not sectioned yet.
+                'approved'     => $approved + $enrolled,
+                'enrolled'     => $enrolled,
+            ];
+        }
+
+        $schoolYear = $period?->school_year;
+
+        return [
+            'sy'                => $schoolYear ? 'SY ' . str_replace('-', '–', $schoolYear) : 'Current School Year',
+            'key'               => $schoolYear ?: 'current',
+            'status'            => 'active',
+            'period'            => $period && $period->start_date && $period->end_date
+                ? $period->start_date->format('F j, Y') . ' – ' . $period->end_date->format('F j, Y')
+                : 'Enrollment period not set',
+            'totalApplications' => array_sum(array_column($grades, 'applications')),
+            'totalPending'      => array_sum(array_column($grades, 'pending')),
+            'totalApproved'     => array_sum(array_column($grades, 'approved')),
+            'totalEnrolled'     => array_sum(array_column($grades, 'enrolled')),
+            'totalSections'     => array_sum(array_column($grades, 'sections')),
+            'grades'            => $grades,
+        ];
+    }
+
+    /**
+     * GET /superadmin/history/export?format=pdf|csv
+     * Downloads the enrollment summary shown on the Enrollment History tab.
+     */
+    public function exportHistory(Request $request)
+    {
+        $request->validate(['format' => 'nullable|in:pdf,csv']);
+
+        $summary  = self::enrollmentSummary();
+        $filename = 'enrollment-summary_' . str_replace(['SY ', '–', ' '], ['', '-', '_'], $summary['sy']) . '_' . now()->format('Y-m-d');
+
+        \App\Models\ActivityLog::record($request->user(), 'Exported Enrollment Summary', $summary['sy'] . ' (' . strtoupper($request->input('format', 'pdf')) . ')', 'info');
+
+        if ($request->input('format') === 'csv') {
+            return response()->streamDownload(function () use ($summary) {
+                $out = fopen('php://output', 'w');
+                fwrite($out, "\xEF\xBB\xBF"); // UTF-8 marker so Excel shows "–" / "—" correctly
+                fputcsv($out, [$summary['sy'], $summary['period']]);
+                fputcsv($out, ['Grade Level', 'Sections', 'Applications', 'Pending', 'Approved', 'Enrolled (sectioned)', 'Approval Rate']);
+                foreach ($summary['grades'] as $g) {
+                    fputcsv($out, [$g['label'], $g['sections'], $g['applications'], $g['pending'], $g['approved'], $g['enrolled'],
+                        $g['applications'] ? round($g['approved'] / $g['applications'] * 100) . '%' : '—']);
+                }
+                fputcsv($out, ['Total', $summary['totalSections'], $summary['totalApplications'], $summary['totalPending'], $summary['totalApproved'], $summary['totalEnrolled'],
+                    $summary['totalApplications'] ? round($summary['totalApproved'] / $summary['totalApplications'] * 100) . '%' : '—']);
+                fclose($out);
+            }, $filename . '.csv', ['Content-Type' => 'text/csv']);
+        }
+
+        $logoPath = public_path('photo/logo.png');
+
+        return \Barryvdh\DomPDF\Facade\Pdf::loadView('superadmin.exports.enrollment-summary-pdf', [
+            'summary'     => $summary,
+            'logoData'    => is_file($logoPath) ? 'data:image/png;base64,' . base64_encode(file_get_contents($logoPath)) : null,
+            'generatedAt' => now()->format('M d, Y g:i A'),
+            'generatedBy' => trim(($request->user()->first_name ?? '') . ' ' . ($request->user()->last_name ?? '')) ?: 'Super Admin',
+        ])->setPaper('a4', 'portrait')->download($filename . '.pdf');
+    }
+
+    /* ──────────────────────────────────────────────
        ADMIN ACCOUNTS
     ────────────────────────────────────────────── */
 
